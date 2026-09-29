@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { MAX_INVITES_PER_BATCH, RESERVED_SLUGS } from "./constants";
+import { LABEL_COLORS, MAX_INVITES_PER_BATCH, RESERVED_SLUGS } from "./constants";
 
 export const ROLES = ["owner", "admin", "member"] as const;
 export const PRIORITIES = ["none", "low", "medium", "high", "urgent"] as const;
@@ -100,6 +100,28 @@ export const taskSchema = z.object({
   updatedAt: timestampSchema,
 });
 
+export const labelColorSchema = z.enum(LABEL_COLORS);
+
+export const labelSchema = z.object({
+  id: idSchema,
+  teamId: idSchema,
+  name: z.string().trim().min(1).max(30),
+  color: labelColorSchema,
+});
+
+export const commentAuthorSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("user"), userId: idSchema }),
+  z.object({ kind: z.literal("agent"), agentId: idSchema }),
+]);
+
+export const commentSchema = z.object({
+  id: idSchema,
+  taskId: idSchema,
+  author: commentAuthorSchema,
+  body: z.string().trim().min(1, "Write something first").max(10_000),
+  createdAt: timestampSchema,
+});
+
 export const inviteSchema = z.object({
   id: idSchema,
   teamId: idSchema,
@@ -155,6 +177,14 @@ export const createTaskInputSchema = z.object({
   parentId: taskSchema.shape.parentId.default(null),
 });
 
+export const updateWorkspaceInputSchema = workspaceSchema.pick({ name: true });
+
+export const updateBoardInputSchema = boardSchema.pick({ name: true, description: true }).partial();
+
+export const columnNameSchema = columnSchema.shape.name;
+
+export const createCommentInputSchema = commentSchema.pick({ taskId: true, body: true });
+
 // No defaults here: an update only touches the fields it names.
 export const updateTaskInputSchema = taskSchema
   .pick({
@@ -179,6 +209,13 @@ export type Board = z.infer<typeof boardSchema>;
 export type Column = z.infer<typeof columnSchema>;
 export type Assignee = z.infer<typeof assigneeSchema>;
 export type Task = z.infer<typeof taskSchema>;
+export type LabelColor = z.infer<typeof labelColorSchema>;
+export type Label = z.infer<typeof labelSchema>;
+export type CommentAuthor = z.infer<typeof commentAuthorSchema>;
+export type Comment = z.infer<typeof commentSchema>;
+export type UpdateWorkspaceInput = z.infer<typeof updateWorkspaceInputSchema>;
+export type UpdateBoardInput = z.infer<typeof updateBoardInputSchema>;
+export type CreateCommentInput = z.infer<typeof createCommentInputSchema>;
 export type Invite = z.infer<typeof inviteSchema>;
 export type SignUpInput = z.infer<typeof signUpInputSchema>;
 export type SignInInput = z.infer<typeof signInInputSchema>;

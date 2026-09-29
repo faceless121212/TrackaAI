@@ -4,11 +4,12 @@ export const SIGN_UP_PATH = "/sign-up";
 export const SIGN_OUT_PATH = "/sign-out";
 export const CHECK_EMAIL_PATH = "/sign-up/check-email";
 export const AUTH_CALLBACK_PATH = "/auth/callback";
+export const PRICING_PATH = "/pricing";
 
 // Signed-in users are bounced from these to "/".
 const PUBLIC_PATHS = [SIGN_IN_PATH, SIGN_UP_PATH];
 // These skip the session check entirely (e.g. clearing a stale cookie).
-const OPEN_PATHS = [SIGN_OUT_PATH, AUTH_CALLBACK_PATH];
+const OPEN_PATHS = [SIGN_OUT_PATH, AUTH_CALLBACK_PATH, PRICING_PATH];
 
 function matches(paths: string[], pathname: string): boolean {
   return paths.some((path) => pathname === path || pathname.startsWith(`${path}/`));

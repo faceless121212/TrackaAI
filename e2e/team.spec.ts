@@ -5,6 +5,7 @@ import {
   inviteTeammate,
   joinWithInvite,
   openFreshBoard,
+  upgradeTo,
   openSettings,
   quickAdd,
   signUp,
@@ -13,6 +14,7 @@ import {
 
 test("an invited teammate joins and collaborates on the board", async ({ page, browser, baseURL }) => {
   await openFreshBoard(page);
+  await upgradeTo(page, "Pro");
   const invite = await inviteTeammate(page);
   const { page: mate, context } = await joinWithInvite(browser, baseURL!, invite);
 
@@ -33,6 +35,7 @@ test("an invited teammate joins and collaborates on the board", async ({ page, b
 
 test("owners change roles and remove members", async ({ page, browser, baseURL }) => {
   await openFreshBoard(page);
+  await upgradeTo(page, "Pro");
   const invite = await inviteTeammate(page);
   const { page: mate, context } = await joinWithInvite(browser, baseURL!, invite);
 
@@ -57,6 +60,7 @@ test("owners change roles and remove members", async ({ page, browser, baseURL }
 
 test("ownership can be transferred, then the old owner can leave", async ({ page, browser, baseURL }) => {
   await openFreshBoard(page);
+  await upgradeTo(page, "Pro");
   const invite = await inviteTeammate(page);
   const { page: mate, context } = await joinWithInvite(browser, baseURL!, invite);
 
@@ -79,6 +83,7 @@ test("ownership can be transferred, then the old owner can leave", async ({ page
 
 test("invite links: revoked, resent and opened with the wrong account", async ({ page, browser, baseURL }) => {
   await openFreshBoard(page);
+  await upgradeTo(page, "Lite");
   const revoked = await inviteTeammate(page);
   await page
     .getByRole("listitem", { name: `Invite for ${revoked.email}` })

@@ -31,7 +31,7 @@ export async function signUp(page: Page) {
   return id;
 }
 
-/** From onboarding step 1, creates a team and an "Engineering" workspace; stops at the invite step. */
+/** From onboarding step 1, creates a (Free) team and an "Engineering" workspace; stops at step 3. */
 export async function createTeamAndWorkspace(page: Page, teamName: string) {
   await page.getByLabel("Team name", { exact: true }).fill(teamName);
   await page.getByRole("button", { name: "Continue" }).click();
@@ -39,16 +39,25 @@ export async function createTeamAndWorkspace(page: Page, teamName: string) {
   await page.getByLabel("Workspace name", { exact: true }).fill("Engineering");
   await expect(page.getByLabel("Key prefix", { exact: true })).toHaveValue("ENG");
   await page.getByRole("button", { name: "Continue" }).click();
-  await expect(page.getByRole("heading", { name: "Invite your teammates" })).toBeVisible();
+  // Free teams are for one person, so step 3 offers the plans instead of invites.
+  await expect(page.getByRole("heading", { name: "Working with others?" })).toBeVisible();
 }
 
 /** Signs up a fresh user with their own team and lands on its empty "Engineering" board (keys ENG-n). */
 export async function openFreshBoard(page: Page) {
   const id = await signUp(page);
   await createTeamAndWorkspace(page, `Team ${id}`);
-  await page.getByRole("link", { name: "Skip for now" }).click();
+  await page.getByRole("link", { name: "Go to your board" }).click();
   await expect(page.getByRole("region", { name: "Backlog" })).toBeVisible();
   return id;
+}
+
+/** Moves the current team to a paid plan through the (simulated) checkout. */
+export async function upgradeTo(page: Page, plan: "Lite" | "Pro") {
+  await openSettings(page, "Billing");
+  await page.getByRole("link", { name: `Upgrade to ${plan}` }).click();
+  await page.getByRole("button", { name: "Confirm and subscribe" }).click();
+  await expect(page.getByText(`You're on ${plan} now`)).toBeVisible();
 }
 
 export const column = (page: Page, name: string) => page.getByRole("region", { name, exact: true });
@@ -80,13 +89,13 @@ export async function saved(page: Page) {
 }
 
 /** Opens a settings tab of the current team from the sidebar. */
-export async function openSettings(page: Page, tab: "General" | "Members" | "Labels" | "Profile") {
+export async function openSettings(page: Page, tab: "General" | "Members" | "Labels" | "Profile" | "Billing") {
   await page.getByRole("link", { name: "Settings", exact: true }).click();
   await page.getByRole("navigation", { name: "Settings" }).getByRole("link", { name: tab }).click();
   await expect(page.getByRole("link", { name: tab, exact: true })).toHaveAttribute("aria-current", "page");
 }
 
-/** Invites a fresh email from the members page; returns it with the invite link (emails arrive in M5). */
+/** Invites a fresh email from the members page; returns it with the invite link (no emails are sent). */
 export async function inviteTeammate(owner: Page, role: "Member" | "Admin" = "Member") {
   await openSettings(owner, "Members");
   const email = `mate-${uniqueId()}@example.test`;

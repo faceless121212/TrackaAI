@@ -78,9 +78,12 @@ export function planLimitMessage(plan: Plan, resource: PlanResource): string {
   const noun = RESOURCE_NOUN[resource];
   const unit = resource === "members" ? "people" : noun;
   const solo = plan === "free" && resource === "members";
+  const limit = limitFor(plan, resource);
   const current = solo
     ? "The Free plan is for one person."
-    : `The ${PLAN_CATALOG[plan].name} plan includes up to ${limitFor(plan, resource)} ${unit}.`;
+    : limit === 1
+      ? `The ${PLAN_CATALOG[plan].name} plan includes 1 ${noun.replace(/s$/, "")}.`
+      : `The ${PLAN_CATALOG[plan].name} plan includes up to ${limit} ${unit}.`;
   const next = nextPlanFor(plan, resource);
   if (!next) return current;
   const nextLimit = limitFor(next, resource);
@@ -90,4 +93,25 @@ export function planLimitMessage(plan: Plan, resource: PlanResource): string {
       ? `for unlimited ${noun}`
       : `for up to ${nextLimit} ${unit}`;
   return `${current} Upgrade to ${PLAN_CATALOG[next].name} ${gain}.`;
+}
+
+/** The pricing table's feature list for a plan. */
+export function planFeatures(plan: Plan): { label: string; included: boolean }[] {
+  const { limits, features } = PLAN_CATALOG[plan];
+  const people =
+    limits.members === 1 ? "Just you" : limits.members === null ? "Unlimited people" : `Up to ${limits.members} people`;
+  const workspaces =
+    limits.workspaces === null
+      ? "Unlimited workspaces"
+      : limits.workspaces === 1
+        ? "1 workspace"
+        : `Up to ${limits.workspaces} workspaces`;
+  const ai = limits.aiRuns === null ? "Unlimited AI runs" : `${limits.aiRuns} AI runs / month`;
+  return [
+    { label: people, included: true },
+    { label: workspaces, included: true },
+    { label: ai, included: true },
+    { label: "Board copilot", included: features.copilot },
+    { label: "AI teammate", included: features.aiTeammate },
+  ];
 }

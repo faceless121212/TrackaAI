@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PLAN_CATALOG, PLANS, canAdd, compareTiers, limitFor, planLimitMessage } from "./plans";
+import { PLAN_CATALOG, PLANS, canAdd, compareTiers, limitFor, planFeatures, planLimitMessage } from "./plans";
 import { RESERVED_SLUGS } from "./constants";
 
 describe("plan limits", () => {
@@ -44,9 +44,29 @@ describe("plan limits", () => {
     expect(planLimitMessage("free", "members")).toBe(
       "The Free plan is for one person. Upgrade to Lite to invite teammates.",
     );
+    expect(planLimitMessage("free", "workspaces")).toBe(
+      "The Free plan includes 1 workspace. Upgrade to Lite for up to 10 workspaces.",
+    );
     expect(planLimitMessage("lite", "workspaces")).toBe(
       "The Lite plan includes up to 10 workspaces. Upgrade to Pro for unlimited workspaces.",
     );
+  });
+
+  it("describes each plan for the pricing table", () => {
+    expect(planFeatures("free")).toEqual([
+      { label: "Just you", included: true },
+      { label: "1 workspace", included: true },
+      { label: "10 AI runs / month", included: true },
+      { label: "Board copilot", included: false },
+      { label: "AI teammate", included: false },
+    ]);
+    expect(planFeatures("lite").slice(0, 3).map((f) => f.label)).toEqual([
+      "Up to 3 people",
+      "Up to 10 workspaces",
+      "100 AI runs / month",
+    ]);
+    expect(planFeatures("pro").every((f) => f.included)).toBe(true);
+    expect(planFeatures("pro")[0].label).toBe("Unlimited people");
   });
 
   it("keeps /pricing and /auth free of team slugs", () => {

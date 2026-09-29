@@ -4,7 +4,7 @@ import { useObject } from "@ai-sdk/react";
 import { Sparkles } from "lucide-react";
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
-import { AiError } from "@/components/ai/ai-error";
+import { AiError, INCOMPLETE } from "@/components/ai/ai-error";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -27,7 +27,7 @@ export function BreakdownButton({ task }: { task: Pick<Task, "id" | "key" | "tit
   const breakdown = useObject({
     api: "/api/ai/breakdown",
     schema: breakdownSchema,
-    onFinish: ({ object }) => setIncomplete(object ? undefined : new Error("incomplete")),
+    onFinish: ({ object }) => setIncomplete(object ? undefined : new Error(INCOMPLETE)),
   });
   const run = () => {
     if (breakdown.isLoading) return;

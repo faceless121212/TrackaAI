@@ -16,7 +16,7 @@ This file holds the detailed, task-level plan for the **current** milestone. Eac
 | M5 — Emails (Resend) | ⏭️ Skipped (decision) |
 | M6 — Plans & billing (simulated) | ✅ Done |
 | M7 — AI I: task writer & breakdown | ✅ Done |
-| M8 — AI II: board copilot | — |
+| M8 — AI II: board copilot | ✅ Done |
 | M9 — AI III: AI teammate | — |
 | M10 — Hardening & launch | — |
 
@@ -15416,6 +15416,48 @@ Gotchas:
 7. The dev server keeps the repositories on `globalThis` across hot reloads, so a changed repository interface needs a dev-server restart.
 8. Known limitation: sub-tasks are created one by one; if one fails midway, the ones before it stay.
 
-## Next up: M8
+---
 
-Board copilot (side-panel chat with tools and confirm cards), once M7 is merged.
+# M8 — AI II: board copilot — Plan
+
+**Goal:** A side panel on the board where you chat with an assistant that can search the board, summarize it, and create, update, move and assign tasks. Reads run immediately; **every change shows a confirm card** and runs only after you approve it, with your own permissions. Pro plan only (PRD §5.5).
+
+**Architecture:**
+- `/api/ai/copilot`: `useChat` + `streamText` with tools (AI SDK v7), model `claude-sonnet-5`.
+- `toolApproval: 'user-approval'` on the four mutating tools. Approvals are HMAC-signed with `TOOL_APPROVAL_SECRET` (`experimental_toolApprovalSecret`), so a client can't forge an approval in the chat history it sends (a user can still replay their own signed approval, which only repeats a change they could make by hand).
+- Tools are built per request from the caller's repositories and board (`src/server/ai/copilot/tools.ts`). They resolve names (column, member, label) and task keys on the server, reject anything outside the current board (members and labels come only from the caller's team, so the refs are valid by construction), and validate with the domain schemas.
+- Every request reserves a run (`start_ai_run`, feature `copilot`), like M7. Non-Pro teams get a 402 with the upgrade path.
+- Board content (task titles and descriptions written by teammates) is untrusted: the instructions say so, and nothing changes without a confirm click anyway.
+
+**Tasks:**
+1. `copilot` feature: domain + migration (ai_usage check constraint) + test.
+2. Copilot tools with unit tests against the mock repositories.
+3. Instructions (board context) + route handler (auth, access, Pro gate, run reservation, signed approvals, step limit).
+4. Mock copilot model for e2e (a tool call on "move …", text otherwise).
+5. UI: "Copilot" button in the board header → side sheet with messages, confirm cards (Approve / Deny) and result lines; the board refreshes after a change.
+6. E2E (mock), one live run, docs, pre-PR review → PR → auto-merge.
+
+### Build record
+
+Shipped as planned. Verified live with `claude-sonnet-5`: an accurate board summary, and a two-part request that became two confirm cards; denying both changed nothing, and the model acknowledged it. Each request was logged in `ai_usage` (feature `copilot`).
+
+Gotchas:
+1. AI SDK v7 moved approval to `toolApproval` on `streamText` (`needsApproval` is deprecated); the client continues after a decision with `sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithApprovalResponses`.
+2. The chat history comes from the client, so approvals could be forged → `experimental_toolApprovalSecret` signs each approval request; the history is also checked with `validateUIMessages` against the tools and capped at 60 messages.
+3. Tools return errors as thrown messages written for the model ("No column named X. Columns: …"), so it can correct names and retry once.
+4. A modal sheet hides the board from the accessibility tree, so e2e checks the board after closing the panel.
+5. `@ai-sdk/provider` is a direct dev dependency (the mock copilot model uses its stream-part types).
+6. (Pre-PR review) Hardening:
+   - Confirm cards show the full description text a change would write, and the target task's current title. A teammate could plant text that steers the model into writing a phishing link.
+   - AI Markdown drops images, which would leak data on render; its links are `nofollow`.
+   - Requests are capped at 200 KB, 60 messages and 2000 characters per message; `system` messages are refused.
+   - Unanswered cards can't wedge the chat: Send waits for every decision, and history conversion ignores incomplete tool calls.
+   - `update_task` refuses unknown labels (instead of clearing them) and validates with `updateTaskInputSchema`.
+   - Names go into the instructions as a JSON data block.
+   - Production refuses to run without a 32+ character `TOOL_APPROVAL_SECRET` (503).
+   - The chat survives closing the panel, and there is a "New chat" button.
+7. Each approval continuation is a new request, so one approved change reserves two AI runs (unlimited on Pro; it shows in `ai_usage`).
+
+## Next up: M9
+
+AI teammate (assignable agent members and background runs), once M8 is merged.

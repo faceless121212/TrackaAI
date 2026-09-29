@@ -4,7 +4,7 @@ import { useObject } from "@ai-sdk/react";
 import { Sparkles } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
-import { AiError } from "@/components/ai/ai-error";
+import { AiError, INCOMPLETE } from "@/components/ai/ai-error";
 import { FormError, SelectField } from "@/components/forms/fields";
 import { useFormAction } from "@/components/forms/use-form-action";
 import { LabelChip } from "@/components/tasks/label-chip";
@@ -69,7 +69,7 @@ function CreateTaskForm({
     schema: taskDraftSchema,
     onFinish: ({ object }) => {
       if (!object) {
-        setIncomplete(new Error("incomplete"));
+        setIncomplete(new Error(INCOMPLETE));
         return;
       }
       setTitle(object.title);

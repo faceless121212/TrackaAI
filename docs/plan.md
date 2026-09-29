@@ -69,7 +69,7 @@ Real Stripe was skipped by decision (2026-09-29): billing is **simulated**, and 
 - Task writer: streamed structured output into the create dialog.
 - Breakdown agent: preview sub-tasks → create.
 
-## M8 — AI II: Board copilot
+## M8 — AI II: Board copilot ✅
 - Side-panel chat (`useChat`) with tools: search/create/update/move/assign/summarize; confirm cards for mutations; runs with user's permissions.
 
 ## M9 — AI III: AI teammate

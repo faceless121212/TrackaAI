@@ -1,7 +1,7 @@
 "use client";
 
 import { Ellipsis } from "lucide-react";
-import { startTransition, useState } from "react";
+import { startTransition, useState, type ReactNode } from "react";
 import { FormError, TextField } from "@/components/forms/fields";
 import { useFormAction } from "@/components/forms/use-form-action";
 import {
@@ -31,10 +31,13 @@ export function BoardHeader({
   board,
   workspaceName,
   canManage,
+  actions,
 }: {
   board: Board;
   workspaceName: string;
   canManage: boolean;
+  /** Extra buttons on the right (e.g. Copilot). */
+  actions?: ReactNode;
 }) {
   const [dialog, setDialog] = useState<"edit" | "delete" | null>(null);
 
@@ -45,6 +48,7 @@ export function BoardHeader({
         <h1 className="text-xl font-semibold">{board.name}</h1>
         {board.description && <p className="text-muted-foreground text-sm">{board.description}</p>}
       </div>
+      {actions && <div className="order-last ml-auto flex shrink-0 items-center gap-2">{actions}</div>}
       {canManage && (
         <>
           <DropdownMenu>

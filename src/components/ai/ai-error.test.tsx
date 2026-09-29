@@ -9,6 +9,7 @@ describe("parseAiError", () => {
 
   it("falls back to a generic message", () => {
     expect(parseAiError(new Error("<html>"))).toEqual({ message: "The AI couldn't finish. Please try again." });
+    expect(parseAiError(new Error("Failed to fetch"))).toEqual({ message: "Failed to fetch" });
     expect(parseAiError(undefined)).toBeNull();
   });
 });

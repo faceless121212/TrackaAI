@@ -1,5 +1,8 @@
 import Link from "next/link";
 
+/** For a stream that ended early or produced invalid output. */
+export const INCOMPLETE = "The AI couldn't finish. Please try again.";
+
 /** The AI routes answer failures with JSON ({ error, upgradeHref }); anything else is a generic failure. */
 export function parseAiError(error: Error | undefined): { message: string; upgradeHref?: string } | null {
   if (!error) return null;
@@ -9,9 +12,12 @@ export function parseAiError(error: Error | undefined): { message: string; upgra
       return { message: body.error, upgradeHref: typeof body.upgradeHref === "string" ? body.upgradeHref : undefined };
     }
   } catch {
-    // not JSON: a network error or a failed stream
+    // Not JSON: a short plain message (a failed stream, "Failed to fetch") is shown as is.
+    if (error.message && error.message.length <= 200 && !error.message.includes("<")) {
+      return { message: error.message };
+    }
   }
-  return { message: "The AI couldn't finish. Please try again." };
+  return { message: INCOMPLETE };
 }
 
 export function AiError({ error }: { error: Error | undefined }) {

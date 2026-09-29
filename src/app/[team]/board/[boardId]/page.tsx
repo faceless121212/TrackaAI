@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { BoardView } from "@/components/board/board-view";
+import type { CopilotAccess } from "@/components/board/copilot-panel";
+import { PLAN_CATALOG, type Role, type Team } from "@/lib/domain";
+import { settingsPath } from "@/lib/paths";
 import { requireTeamMember } from "@/server/auth/guards";
 import { can } from "@/server/auth/permissions";
 import { aiAvailable } from "@/server/ai/model";
@@ -47,10 +50,19 @@ export default async function BoardPage({ params, searchParams }: PageProps<"/[t
       currentUserId={user.id}
       canManage={can(membership.role, "column:manage")}
       aiEnabled={aiAvailable()}
+      copilot={copilotAccess(team, membership.role)}
       canModerate={can(membership.role, "comment:moderate")}
       realtime={
         resolveDataBackend(process.env.DATA_BACKEND) === "supabase" ? supabaseConfig() : null
       }
     />
   );
+}
+
+function copilotAccess(team: Team, role: Role): CopilotAccess | null {
+  if (!aiAvailable()) return null;
+  if (PLAN_CATALOG[team.plan].features.copilot) return { status: "on" };
+  return can(role, "billing:manage")
+    ? { status: "upgrade", message: "The board copilot is part of the Pro plan.", upgradeHref: settingsPath(team.slug, "billing") }
+    : { status: "upgrade", message: "The board copilot is part of the Pro plan. Ask the team owner to upgrade." };
 }

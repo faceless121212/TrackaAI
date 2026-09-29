@@ -8,7 +8,7 @@ import { can } from "@/server/auth/permissions";
 import { assertWithinPlan } from "@/server/billing/limits";
 import { PlanLimitError, getRepositories } from "@/server/data";
 import { aiAvailable, generationModel } from "./model";
-import { finalUsage, streamStructured } from "./stream";
+import { finalUsage, streamStructured, type TokenUsage } from "./stream";
 
 export function aiError(error: string, status: number, upgradeHref?: string) {
   return Response.json({ error, upgradeHref }, { status });
@@ -31,35 +31,51 @@ export async function streamForTeam<T extends z.ZodType>(options: {
   /** What the mock model (AI_MOCK=1) streams. */
   mockOutput: () => z.infer<T>;
 }): Promise<Response> {
+  const { model, modelId } = generationModel(options.mockOutput);
+  const run = await reserveRun({ ...options, modelId });
+  if (run instanceof Response) return run;
+
+  const result = streamStructured({ model, schema: options.schema, instructions: options.instructions, prompt: options.prompt });
+  recordTokensAfter(run.id, () => finalUsage(result));
+  return createTextStreamResponse({ stream: toTextStream({ stream: result.stream }) });
+}
+
+type RunOptions = { team: Pick<Team, "id" | "slug" | "plan">; userId: string; role: Role; feature: AiFeature; modelId: string };
+
+/**
+ * Reserves one AI run (enforcing the plan's monthly limit atomically), or
+ * returns the error response: 503 without a key, 402 at the limit (with the
+ * upgrade link for the owner; everyone else is told to ask them).
+ */
+export async function reserveRun(options: RunOptions): Promise<{ id: string } | Response> {
   if (!aiAvailable()) return aiError("AI isn't set up on this server yet.", 503);
   const repos = getRepositories();
-  const { model, modelId } = generationModel(options.mockOutput);
-  let runId: string;
   try {
     await assertWithinPlan(repos, options.team, "aiRuns");
-    runId = await repos.aiUsage.startRun({
+    const id = await repos.aiUsage.startRun({
       teamId: options.team.id,
       userId: options.userId,
       feature: options.feature,
-      model: modelId,
+      model: options.modelId,
     });
+    return { id };
   } catch (error) {
     if (!(error instanceof PlanLimitError)) throw error;
-    // Only the owner can upgrade; everyone else is told to ask them.
     return can(options.role, "billing:manage")
       ? aiError(error.message, 402, settingsPath(options.team.slug, "billing"))
       : aiError(`${error.message} Ask the team owner to upgrade.`, 402);
   }
+}
 
-  const result = streamStructured({ model, schema: options.schema, instructions: options.instructions, prompt: options.prompt });
+/** Fills in the run's tokens once the response has finished. */
+export function recordTokensAfter(runId: string, usage: () => Promise<TokenUsage>) {
   after(async () => {
     try {
-      await repos.aiUsage.finishRun(runId, await finalUsage(result));
+      await getRepositories().aiUsage.finishRun(runId, await usage());
     } catch (error) {
       console.error("[ai] run failed or its tokens couldn't be saved", error);
     }
   });
-  return createTextStreamResponse({ stream: toTextStream({ stream: result.stream }) });
 }
 
 /** For route handlers: a JSON 401 instead of the sign-in redirect pages get. */

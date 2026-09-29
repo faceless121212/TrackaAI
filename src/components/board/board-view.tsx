@@ -48,6 +48,7 @@ import { AddColumn, BoardColumn } from "./board-column";
 import { BoardHeader } from "./board-header";
 import { columnReducer, groupTasks, planTaskMove, taskReducer } from "./board-state";
 import { BoardToolbar } from "./board-toolbar";
+import { CopilotButton, type CopilotAccess } from "./copilot-panel";
 import { CreateTaskDialog } from "./create-task-dialog";
 import { SortableTaskCard, TaskCardView } from "./task-card";
 import { TaskSheet } from "./task-sheet";
@@ -69,6 +70,8 @@ export type BoardViewProps = {
   realtime: RealtimeConfig;
   /** Whether the AI task writer and breakdown are available. */
   aiEnabled: boolean;
+  /** The board copilot: on (Pro), an upgrade note, or hidden (null: AI not set up). */
+  copilot: CopilotAccess | null;
 };
 
 function isTyping(target: EventTarget | null) {
@@ -292,7 +295,20 @@ export function BoardView(props: BoardViewProps) {
 
   return (
     <div data-slot="board" aria-busy={saving} className="flex min-h-0 flex-1 flex-col gap-4">
-      <BoardHeader board={board} workspaceName={props.workspaceName} canManage={canManage} />
+      <BoardHeader
+        board={board}
+        workspaceName={props.workspaceName}
+        canManage={canManage}
+        actions={
+          props.copilot && (
+            <CopilotButton
+              boardId={board.id}
+              access={props.copilot}
+              taskTitles={Object.fromEntries(tasks.map((task) => [task.key, task.title]))}
+            />
+          )
+        }
+      />
       <BoardToolbar
         filters={filters}
         onChange={setFilters}

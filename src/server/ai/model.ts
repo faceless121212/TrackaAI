@@ -1,10 +1,13 @@
 import "server-only";
 import { anthropic } from "@ai-sdk/anthropic";
 import type { LanguageModel } from "ai";
+import { mockCopilotModel } from "./copilot/mock-copilot-model";
 import { jsonStreamModel } from "./mock-model";
 
 /** Cheap generation (task writer, breakdown). */
 export const GENERATION_MODEL = "claude-haiku-4-5";
+/** Conversation with tools (board copilot). */
+export const COPILOT_MODEL = "claude-sonnet-5";
 
 /** AI_MOCK=1 (e2e, CI) streams canned output instead of calling Anthropic. */
 export function aiMocked(): boolean {
@@ -19,4 +22,9 @@ export function aiAvailable(): boolean {
 export function generationModel(mockOutput: () => unknown): { model: LanguageModel; modelId: string } {
   if (aiMocked()) return { model: jsonStreamModel(JSON.stringify(mockOutput())), modelId: "mock" };
   return { model: anthropic(GENERATION_MODEL), modelId: GENERATION_MODEL };
+}
+
+export function copilotModel(): { model: LanguageModel; modelId: string } {
+  if (aiMocked()) return { model: mockCopilotModel(), modelId: "mock" };
+  return { model: anthropic(COPILOT_MODEL), modelId: COPILOT_MODEL };
 }

@@ -5,6 +5,7 @@ import { emptyDb } from "@/server/data/mock/db";
 import { createMockRepositories } from "@/server/data/mock/repositories";
 import { createMemoryStore } from "@/server/data/mock/store";
 import type { Repositories } from "@/server/data/types";
+import { monthStart } from "@/lib/domain";
 import { assertSeatToJoin, assertWithinPlan, countNewInvitees } from "./limits";
 
 let repos: Repositories;
@@ -41,6 +42,24 @@ describe("assertWithinPlan", () => {
     await onPlan("pro");
     await assertWithinPlan(repos, team, "members", 500);
     await assertWithinPlan(repos, team, "workspaces", 500);
+  });
+});
+
+describe("AI runs", () => {
+  it("allows the plan's runs this month, then asks to upgrade", async () => {
+    const run = { teamId: team.id, userId: owner.id, feature: "task_writer" as const, model: "m" };
+    for (let i = 0; i < 9; i++) await repos.aiUsage.startRun(run);
+    await assertWithinPlan(repos, team, "aiRuns");
+    await repos.aiUsage.startRun(run);
+    const error = await assertWithinPlan(repos, team, "aiRuns").catch((e: unknown) => e);
+    expect(error).toMatchObject({ plan: "free", resource: "aiRuns", message: expect.stringContaining("Lite") });
+    await onPlan("pro");
+    await assertWithinPlan(repos, team, "aiRuns");
+  });
+
+  it("counts from the first of the month (UTC)", () => {
+    expect(monthStart(new Date("2026-09-29T18:00:00Z")).toISOString()).toBe("2026-09-01T00:00:00.000Z");
+    expect(monthStart(new Date("2027-01-01T00:00:00Z")).toISOString()).toBe("2027-01-01T00:00:00.000Z");
   });
 });
 

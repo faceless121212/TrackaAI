@@ -19,6 +19,26 @@ export type Database = {
       profiles: Table<{ avatar_url: string | null; created_at: string; email: string; id: string; name: string; theme: string | null }, { avatar_url?: string | null; created_at?: string; email: string; id: string; name: string; theme?: string | null }>;
       task_labels: Table<{ label_id: string; task_id: string }, { label_id: string; task_id: string }>;
       tasks: Table<{ assignee_agent_id: string | null; assignee_user_id: string | null; board_id: string; column_id: string; created_at: string; created_by: string; description: string; due_date: string | null; id: string; key: string; number: number; parent_id: string | null; position: string; priority: string; title: string; updated_at: string }, { assignee_agent_id?: string | null; assignee_user_id?: string | null; board_id: string; column_id: string; created_at?: string; created_by: string; description?: string; due_date?: string | null; id?: string; key: string; number: number; parent_id?: string | null; position: string; priority?: string; title: string; updated_at?: string }>;
+      ai_usage: Table<
+        {
+          id: string;
+          team_id: string;
+          user_id: string | null;
+          feature: string;
+          model: string;
+          input_tokens: number;
+          output_tokens: number;
+          created_at: string;
+        },
+        {
+          team_id: string;
+          user_id: string;
+          feature: string;
+          model: string;
+          input_tokens?: number;
+          output_tokens?: number;
+        }
+      >;
       teams: Table<{ created_at: string; id: string; name: string; plan: string; slug: string }, { created_at?: string; id?: string; name: string; plan?: string; slug: string }>;
       workspaces: Table<{ created_at: string; id: string; key_prefix: string; name: string; next_task_number: number; team_id: string }, { created_at?: string; id?: string; key_prefix: string; name: string; next_task_number?: number; team_id: string }>;
     };
@@ -55,6 +75,14 @@ export type Database = {
       set_team_plan: {
         Args: { p_team: string; p_plan: string; p_actor?: string };
         Returns: Database["public"]["Tables"]["teams"]["Row"];
+      };
+      start_ai_run: {
+        Args: { p_team: string; p_feature: string; p_model: string; p_actor?: string };
+        Returns: string;
+      };
+      finish_ai_run: {
+        Args: { p_run: string; p_input: number; p_output: number; p_actor?: string };
+        Returns: undefined;
       };
       team_usage: {
         Args: { p_team: string };

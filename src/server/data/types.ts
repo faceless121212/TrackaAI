@@ -1,4 +1,5 @@
 import type {
+  AiFeature,
   Board,
   Column,
   Comment,
@@ -178,6 +179,22 @@ export interface InvitesRepo {
   accept(token: string, userId: string): Promise<Membership>;
 }
 
+export type AiRunInput = { teamId: string; userId: string; feature: AiFeature; model: string };
+export type AiUsageRow = AiRunInput & { id: string; inputTokens: number; outputTokens: number; createdAt: string };
+
+export interface AiUsageRepo {
+  /**
+   * Reserves one AI run before the model is called: throws PlanLimitError if
+   * the team has used this month's runs, atomically (parallel calls can't all
+   * slip under the limit). Returns the run's id.
+   */
+  startRun(input: AiRunInput): Promise<string>;
+  /** Records the run's tokens (once, by the user who started it). */
+  finishRun(runId: string, usage: { inputTokens: number; outputTokens: number }): Promise<void>;
+  /** The team's runs since `since` (plan limits count the calendar month). */
+  countSince(teamId: string, since: Date): Promise<number>;
+}
+
 export interface Repositories {
   auth: AuthRepo;
   users: UsersRepo;
@@ -189,4 +206,5 @@ export interface Repositories {
   invites: InvitesRepo;
   labels: LabelsRepo;
   comments: CommentsRepo;
+  aiUsage: AiUsageRepo;
 }

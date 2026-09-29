@@ -44,7 +44,7 @@ export const PLAN_CATALOG: Record<Plan, PlanInfo> = {
 const RESOURCE_NOUN: Record<PlanResource, string> = {
   members: "teammates",
   workspaces: "workspaces",
-  aiRuns: "AI runs",
+  aiRuns: "AI runs a month",
 };
 
 export function limitFor(plan: Plan, resource: PlanResource): number | null {
@@ -114,4 +114,9 @@ export function planFeatures(plan: Plan): { label: string; included: boolean }[]
     { label: "Board copilot", included: features.copilot },
     { label: "AI teammate", included: features.aiTeammate },
   ];
+}
+
+/** The first moment of the current calendar month (UTC): AI runs reset then. */
+export function monthStart(now = new Date()): Date {
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
 }

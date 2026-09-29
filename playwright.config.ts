@@ -19,8 +19,8 @@ export default defineConfig({
   webServer: {
     // Each run starts from a freshly seeded mock db, isolated from local dev data.
     command: `rm -f ${E2E_DB} && pnpm build && pnpm start --port ${PORT}`,
-    // Always the mock backend, even when .env.local selects Supabase.
-    env: { DATA_BACKEND: "mock", MOCK_DB_PATH: E2E_DB, APP_URL: `http://localhost:${PORT}` },
+    // Always the mock backend and mock AI model, whatever .env.local says.
+    env: { DATA_BACKEND: "mock", AI_MOCK: "1", MOCK_DB_PATH: E2E_DB, APP_URL: `http://localhost:${PORT}` },
     url: `http://localhost:${PORT}/sign-in`,
     reuseExistingServer: !process.env.CI,
     timeout: 180_000,

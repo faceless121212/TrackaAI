@@ -1,22 +1,25 @@
-import { canAdd, type PlanResource, type Team } from "@/lib/domain";
+import { canAdd, monthStart, type PlanResource, type Team } from "@/lib/domain";
 import { PlanLimitError } from "@/server/data/errors";
 import type { Repositories } from "@/server/data/types";
 
 // The one place server actions check plan limits (the database enforces the
 // same limits as a backstop). Pass getRepositories() from the caller.
 
-type CountedResource = Exclude<PlanResource, "aiRuns">;
-
 /** Throws PlanLimitError unless `adding` more of `resource` fit the team's plan. */
 export async function assertWithinPlan(
   repos: Repositories,
   team: Pick<Team, "id" | "plan">,
-  resource: CountedResource,
+  resource: PlanResource,
   adding = 1,
 ): Promise<void> {
-  const usage = await repos.teams.usage(team.id);
-  const used = resource === "members" ? usage.members + usage.pendingInvites : usage.workspaces;
+  const used = await currentUse(repos, team.id, resource);
   if (!canAdd(team.plan, resource, used, adding)) throw new PlanLimitError(team.plan, resource);
+}
+
+async function currentUse(repos: Repositories, teamId: string, resource: PlanResource): Promise<number> {
+  if (resource === "aiRuns") return repos.aiUsage.countSince(teamId, monthStart());
+  const usage = await repos.teams.usage(teamId);
+  return resource === "members" ? usage.members + usage.pendingInvites : usage.workspaces;
 }
 
 /**

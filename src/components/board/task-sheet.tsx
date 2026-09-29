@@ -34,9 +34,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { PRIORITIES, type Column, type Comment, type Label, type Task, type UpdateTaskInput } from "@/lib/domain";
 import { addCommentAction, deleteCommentAction } from "@/server/actions/comments";
+import { BreakdownButton } from "./breakdown-dialog";
 
 type TaskSheetProps = {
   task: Task | undefined;
+  /** The open task's sub-tasks, in board order. */
+  subtasks: Task[];
+  aiEnabled: boolean;
+  onOpenTask: (task: Task) => void;
   columns: Column[];
   members: MemberOption[];
   labels: Label[];
@@ -72,6 +77,9 @@ export function TaskSheet({ task, onClose, ...props }: TaskSheetProps) {
 
 function TaskSheetBody({
   task,
+  subtasks,
+  aiEnabled,
+  onOpenTask,
   columns,
   members,
   labels,
@@ -168,6 +176,33 @@ function TaskSheetBody({
         </dl>
 
         <DescriptionField description={task.description} onSave={(description) => onUpdate({ description })} />
+
+        <section aria-labelledby="subtasks-heading" className="space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <h3 id="subtasks-heading" className="text-sm font-medium">
+              Sub-tasks{subtasks.length > 0 && <span className="text-muted-foreground"> · {subtasks.length}</span>}
+            </h3>
+            {aiEnabled && <BreakdownButton task={task} />}
+          </div>
+          {subtasks.length > 0 ? (
+            <ul className="divide-y rounded-md border">
+              {subtasks.map((subtask) => (
+                <li key={subtask.id}>
+                  <button
+                    type="button"
+                    onClick={() => onOpenTask(subtask)}
+                    className="hover:bg-muted/50 flex w-full items-center gap-2 px-3 py-2 text-left text-sm"
+                  >
+                    <span className="text-muted-foreground font-mono text-xs">{subtask.key}</span>
+                    <span className="truncate">{subtask.title}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-muted-foreground text-sm">No sub-tasks yet.</p>
+          )}
+        </section>
 
         <CommentsSection
           taskId={task.id}

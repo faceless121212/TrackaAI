@@ -3,7 +3,7 @@
 Linear-style project management app with AI agents. Teams → Workspaces → Boards → Tasks.
 
 - Product spec: `docs/prd.md` — read before implementing a feature.
-- Milestones: `docs/plan.md`. Per-milestone task plans live in `docs/plans/`.
+- Milestones: `docs/plan.md`. Task-level plan for the current milestone: `docs/build-plan.md`.
 - Repo: github.com/faceless121212/TrackaAI (branch `main`; one branch + PR per milestone).
 
 ## Stack

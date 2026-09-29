@@ -4,7 +4,7 @@ Source of truth for scope: [`docs/prd.md`](./prd.md).
 
 **Strategy: UI first on mock data, then swap in Supabase.** Docker isn't installed yet, so M0–M3 run entirely on a mock data backend behind repository interfaces. M4 introduces local Supabase and flips `DATA_BACKEND=supabase` — screens don't change. Each milestone ends in a working, demoable app and its own PR.
 
-Each milestone gets a detailed task-level plan (`docs/plans/M<n>-*.md`) written right before it starts.
+Each milestone gets a detailed task-level plan in [`docs/build-plan.md`](./build-plan.md), written right before it starts.
 
 ---
 
@@ -15,7 +15,7 @@ Each milestone gets a detailed task-level plan (`docs/plans/M<n>-*.md`) written 
 - `next-themes`: **dark default**, light/system toggle.
 - App layout: collapsible sidebar, top bar, `⌘K` command palette stub.
 - `proxy.ts` with a stubbed session check (mock session cookie).
-- Tooling: ESLint, Prettier, Vitest, Playwright, `pnpm typecheck`, GitHub Actions CI (lint + typecheck + test).
+- Tooling: ESLint, Vitest, Playwright, `pnpm typecheck`, GitHub Actions CI (lint + typecheck + test).
 - Domain types + Zod schemas (`src/lib/domain`) and repository interfaces (`src/server/data/types.ts`).
 
 **Done when:** `pnpm dev` shows the themed shell, toggle works, CI green.

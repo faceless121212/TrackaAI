@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { DEMO, fillSignIn, signInAsDemo } from "./helpers";
+import { DEMO, fillSignIn, openFreshBoard, signInAsDemo } from "./helpers";
 
 test("signed-out visitors are sent to sign-in and back to where they were going", async ({ page }) => {
   await page.goto("/acme?x=1");
@@ -8,14 +8,31 @@ test("signed-out visitors are sent to sign-in and back to where they were going"
   await expect(page).toHaveURL(/\/acme\?x=1$/);
 });
 
-test("app is dark by default and the toggle switches to light and persists", async ({ page }) => {
-  await signInAsDemo(page);
+test("theme is dark by default, toggles to light and follows the user to another browser", async ({
+  page,
+  browser,
+  baseURL,
+}) => {
+  const id = await openFreshBoard(page);
   const html = page.locator("html");
   await expect(html).toHaveClass(/\bdark\b/);
-  await page.getByRole("button", { name: "Toggle theme" }).click();
+  await Promise.all([
+    // The toggle saves the preference in the background; wait for that request.
+    page.waitForResponse((response) => response.request().method() === "POST"),
+    page.getByRole("button", { name: "Toggle theme" }).click(),
+  ]);
   await expect(html).not.toHaveClass(/\bdark\b/);
   await page.reload();
   await expect(html).not.toHaveClass(/\bdark\b/);
+
+  // A new context has empty localStorage, like another device.
+  const otherDevice = await browser.newContext({ baseURL });
+  const second = await otherDevice.newPage();
+  await second.goto("/sign-in");
+  await fillSignIn(second, `user-${id}@example.test`, "password123");
+  await expect(second.getByRole("heading", { name: "My tasks" })).toBeVisible();
+  await expect(second.locator("html")).not.toHaveClass(/\bdark\b/);
+  await otherDevice.close();
 });
 
 test("command palette opens with the keyboard and jumps to a board", async ({ page }) => {

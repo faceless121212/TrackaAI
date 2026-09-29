@@ -16,7 +16,8 @@ import {
   SidebarRail,
 } from "@/components/ui/sidebar";
 import type { Board, Team, User, Workspace } from "@/lib/domain";
-import { boardPath } from "@/lib/paths";
+import { boardPath, settingsPath } from "@/lib/paths";
+import { MemberAvatar } from "@/components/tasks/member-avatar";
 import { signOutAction } from "@/server/actions/auth";
 import { BoardLink } from "./board-link";
 import { navItems } from "./nav-items";
@@ -95,10 +96,19 @@ export function AppSidebar({
         </SidebarGroup>
       </SidebarContent>
       <SidebarFooter>
-        <div className="min-w-0 px-2 text-sm group-data-[collapsible=icon]:hidden">
-          <p className="truncate font-medium">{user.name}</p>
-          <p className="text-muted-foreground truncate text-xs">{user.email}</p>
-        </div>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton asChild size="lg" tooltip="Profile">
+              <Link href={settingsPath(team.slug, "profile")}>
+                <MemberAvatar member={user} className="size-8" />
+                <span className="min-w-0 text-sm">
+                  <span className="block truncate font-medium">{user.name}</span>
+                  <span className="text-muted-foreground block truncate text-xs">{user.email}</span>
+                </span>
+              </Link>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
         <form action={signOutAction}>
           <SidebarMenu>
             <SidebarMenuItem>

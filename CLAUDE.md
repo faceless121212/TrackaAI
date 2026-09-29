@@ -1,3 +1,4 @@
+@AGENTS.md
 # TrackaAI
 
 Linear-style project management app with AI agents. Teams → Workspaces → Boards → Tasks.

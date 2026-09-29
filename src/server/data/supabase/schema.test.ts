@@ -599,6 +599,50 @@ describe("plans and limits", () => {
     await expect(addWorkspace(t, "MKT")).rejects.toThrow(/plan_limit_reached/);
   });
 
+  it("counts every invite in a batch, and re-checks an expired invite that is resent", async () => {
+    const t = await makeTeam(db, "batched", "free");
+    await setPlan(t, "lite");
+    await invite(db, t, "batched-a@example.test");
+    await expect(
+      asUser(db, t.owner, (tx) =>
+        tx.query(
+          `insert into invites (team_id, email, role, token, invited_by, expires_at) values
+             ($1, 'batched-b@example.test', 'member', 'batched-token-b-xxxxxxxx', $2, now() + interval '7 days'),
+             ($1, 'batched-c@example.test', 'member', 'batched-token-c-xxxxxxxx', $2, now() + interval '7 days')`,
+          [t.team, t.owner],
+        ),
+      ),
+    ).rejects.toThrow(/plan_limit_reached/);
+
+    // a expires, and b and c fill the team (owner + 2); resending a would make four.
+    await db.query("update invites set expires_at = now() - interval '1 day' where email = 'batched-a@example.test'");
+    await invite(db, t, "batched-b@example.test");
+    await invite(db, t, "batched-c@example.test");
+    await expect(
+      asUser(db, t.owner, (tx) =>
+        tx.query("update invites set expires_at = now() + interval '7 days' where email = 'batched-a@example.test'"),
+      ),
+    ).rejects.toThrow(/plan_limit_reached/);
+    // A live invite can still get a fresh link.
+    await asUser(db, t.owner, (tx) =>
+      tx.query("update invites set token = 'batched-new-token-xxxxxxx', expires_at = now() + interval '7 days' where email = 'batched-b@example.test'"),
+    );
+  });
+
+  it("doesn't let managers move invites to another team or edit their email or role", async () => {
+    const t = await makeTeam(db, "moved", "free");
+    const other = await asUser(db, t.owner, (tx) =>
+      one<{ id: string }>(tx, "select id from create_team('Moved 2', 'moved-two', '[]')"),
+    );
+    await setPlan(t, "pro");
+    await invite(db, t, "moved-a@example.test");
+    for (const set of [`team_id = '${other.id}'`, "email = 'someone@example.test'", "role = 'admin'"]) {
+      await expect(
+        asUser(db, t.owner, (tx) => tx.query(`update invites set ${set} where team_id = $1`, [t.team])),
+      ).rejects.toThrow(/permission denied/);
+    }
+  });
+
   it("shows usage to members and invitees only", async () => {
     const t = await makeTeam(db, "counted", "free");
     await setPlan(t, "lite");

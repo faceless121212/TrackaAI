@@ -15346,6 +15346,10 @@ Contract changes: `auth.signUp` → `{ user, needsConfirmation }`; `invites.prev
 7. The browser realtime channel subscribed before the session loaded and joined as `anon`, so RLS delivered nothing → load the session and `realtime.setAuth()` before `subscribe()`.
 8. `supabase-js` types `.single()`/`.maybeSingle()` data as nullable → two helpers: `data()` (must exist → `NotFoundError`) and `maybe()` (null is a normal answer).
 9. Stopping `next dev` mid-write can leave a truncated `.next/dev/types/validator.ts` that breaks `tsc` → `rm -rf .next`.
+10. RLS decides *which rows* a user may update, not *which columns*. Without column grants a manager could rewrite `memberships.team_id` with an unfiltered update (the new row is only checked against the update policy) and put a teammate into another team, set `teams.plan`, or rewrite task keys; a user could change `profiles.email` to pass `accept_invite`'s email check → `revoke update` + `grant update (col, …)` per table, a trigger that keeps a task's column, parent and assignee inside its board and team, and `accept_invite` compares against `auth.users.email`. Found by the pre-PR review; covered by PGlite tests.
+11. Realtime `postgres_changes` filters don't apply to DELETE events, which carry only the primary key → an unfiltered DELETE listener that refreshes only for ids on the current board. Depend on primitive config values, not a props object, or every refresh rejoins the channel.
+12. `@supabase/ssr` passes no-store cache headers to `setAll` alongside the cookies; `proxy.ts` must copy both onto its response and redirects. `auth.signOut()` defaults to `scope: "global"` (every device) → use `"local"`.
+13. `.env.local` values reach `next build`/`next start`, so the e2e server pins `DATA_BACKEND=mock` explicitly.
 
 ## Definition of done
 

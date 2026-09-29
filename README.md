@@ -16,7 +16,7 @@ pnpm dev
 ### Data backends
 
 - **Mock** (`DATA_BACKEND=mock`, default): a JSON file at `.data/mock-db.json`, seeded on first run with `demo@trackaai.test` / `demo-password`; delete `.data/` to reset. CI and the e2e suite use this.
-- **Supabase** (`DATA_BACKEND=supabase`): a hosted project. Set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` (public values; no secret key needed). Apply `supabase/migrations/*` in order, then `supabase/seed.sql`, which creates the pre-confirmed `demo@trackaai.test` and `mate@trackaai.test` accounts (password `demo-password`) and the demo board. Sign-up requires confirming the email (Supabase "Confirm email" is on).
+- **Supabase** (`DATA_BACKEND=supabase`): a hosted project. Set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` (public values; no secret key needed). Apply `supabase/migrations/*` in order, then `supabase/seed.sql`, which creates the pre-confirmed `demo@trackaai.test` and `mate@trackaai.test` accounts (password `demo-password`) and the demo board. Sign-up requires confirming the email (Supabase "Confirm email" is on). The seed is for development only (its password is public): delete those two accounts and the `acme` team before a project goes to production.
 
 Invites are shared with the members page's **Copy link** button (email sending was skipped).
 

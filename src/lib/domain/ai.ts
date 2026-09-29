@@ -30,6 +30,12 @@ export const breakdownSchema = z.object({
 });
 export type Breakdown = z.infer<typeof breakdownSchema>;
 
+/** Sub-tasks the user picked from a breakdown (titles as the model wrote them, possibly edited). */
+export const createSubtasksInputSchema = z
+  .array(z.object({ title: z.string().trim().min(1).max(200), description: z.string().max(2000).default("") }))
+  .min(1)
+  .max(8);
+
 const promptSchema = z.string().trim().min(1, "Describe the task in a few words").max(500);
 
 export const taskWriterRequestSchema = z.object({ boardId: idSchema, prompt: promptSchema });

@@ -67,6 +67,8 @@ export type BoardViewProps = {
   canModerate: boolean;
   /** Supabase Realtime settings, or null on the mock backend. */
   realtime: RealtimeConfig;
+  /** Whether the AI task writer and breakdown are available. */
+  aiEnabled: boolean;
 };
 
 function isTyping(target: EventTarget | null) {
@@ -353,10 +355,15 @@ export function BoardView(props: BoardViewProps) {
         boardId={board.id}
         columns={columns}
         members={members}
+        labels={labels}
         defaultColumnId={defaultColumnId}
+        aiEnabled={props.aiEnabled}
       />
       <TaskSheet
         task={openTask}
+        subtasks={openTask ? tasks.filter((task) => task.parentId === openTask.id) : []}
+        aiEnabled={props.aiEnabled}
+        onOpenTask={(task) => replaceParams((params) => params.set("task", task.key))}
         columns={columns}
         members={members}
         labels={labels}

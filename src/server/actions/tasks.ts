@@ -1,7 +1,7 @@
 "use server";
 
 import { refresh } from "next/cache";
-import { createTaskInputSchema, updateTaskInputSchema, type UpdateTaskInput } from "@/lib/domain";
+import { createSubtasksInputSchema, createTaskInputSchema, updateTaskInputSchema, type UpdateTaskInput } from "@/lib/domain";
 import { formValues, type ActionResult, type FormState } from "@/lib/forms";
 import { requireBoardAccess, requireColumnAccess, requireTaskAccess } from "@/server/auth/guards";
 import { assertCan } from "@/server/auth/permissions";
@@ -19,6 +19,7 @@ export async function createTaskAction(_prev: FormState, formData: FormData): Pr
     description: values.description,
     priority: values.priority || undefined,
     assignee: values.assignee && values.assignee !== "none" ? { kind: "user", userId: values.assignee } : null,
+    labelIds: formData.getAll("labelIds").map(String),
   });
   if (!parsed.success) return zodToFormState(parsed.error, values);
 
@@ -78,6 +79,30 @@ export async function deleteTaskAction(taskId: string): Promise<ActionResult> {
     const { membership } = await requireTaskAccess(taskId);
     assertCan(membership.role, "task:delete");
     await getRepositories().tasks.delete(taskId);
+  } catch (error) {
+    return toActionError(error);
+  }
+  refresh();
+  return { ok: true };
+}
+
+/** Creates the sub-tasks the user picked from an AI breakdown, at the end of the parent's column. */
+export async function createSubtasksAction(parentId: string, subtasks: unknown): Promise<ActionResult> {
+  try {
+    const { user, membership, task: parent } = await requireTaskAccess(parentId);
+    assertCan(membership.role, "task:create");
+    const items = createSubtasksInputSchema.parse(subtasks);
+    const repos = getRepositories();
+    for (const item of items) {
+      const input = createTaskInputSchema.parse({
+        boardId: parent.boardId,
+        columnId: parent.columnId,
+        title: item.title,
+        description: item.description,
+        parentId: parent.id,
+      });
+      await repos.tasks.create({ ...input, createdBy: user.id });
+    }
   } catch (error) {
     return toActionError(error);
   }

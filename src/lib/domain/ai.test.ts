@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Label } from "./schemas";
-import { breakdownSchema, matchLabelIds, taskDraftSchema, taskWriterRequestSchema } from "./ai";
+import { breakdownSchema, createSubtasksInputSchema, matchLabelIds, taskDraftSchema, taskWriterRequestSchema } from "./ai";
 
 const labels: Label[] = [
   { id: "l1", teamId: "t", name: "Bug", color: "red" },
@@ -19,6 +19,13 @@ describe("AI schemas", () => {
     expect(breakdownSchema.safeParse({ subtasks: Array(2).fill(subtask) }).success).toBe(false);
     expect(breakdownSchema.safeParse({ subtasks: Array(3).fill(subtask) }).success).toBe(true);
     expect(breakdownSchema.safeParse({ subtasks: Array(9).fill(subtask) }).success).toBe(false);
+  });
+
+  it("accepts 1 to 8 picked sub-tasks with titles", () => {
+    expect(createSubtasksInputSchema.parse([{ title: " Step " }])).toEqual([{ title: "Step", description: "" }]);
+    expect(createSubtasksInputSchema.safeParse([]).success).toBe(false);
+    expect(createSubtasksInputSchema.safeParse([{ title: "" }]).success).toBe(false);
+    expect(createSubtasksInputSchema.safeParse(Array(9).fill({ title: "x" })).success).toBe(false);
   });
 
   it("limits the one-liner a user sends", () => {

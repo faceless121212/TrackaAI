@@ -9,10 +9,14 @@ import {
 import { resolveDataBackend } from "@/server/data/backend";
 import { refreshSupabaseSession } from "@/server/data/supabase/proxy-session";
 
-/** A redirect that keeps any cookies the session refresh set. */
+/** A redirect that keeps any cookies (and no-store headers) the session refresh set. */
 function redirect(url: URL, from?: NextResponse) {
   const response = NextResponse.redirect(url);
   from?.cookies.getAll().forEach((cookie) => response.cookies.set(cookie));
+  for (const key of ["cache-control", "expires", "pragma"]) {
+    const value = from?.headers.get(key);
+    if (value) response.headers.set(key, value);
+  }
   return response;
 }
 

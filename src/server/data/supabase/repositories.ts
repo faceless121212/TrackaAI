@@ -289,7 +289,9 @@ export function createSupabaseRepositories(client: () => Promise<Client>): Repos
 
       async signOut() {
         const db = await client();
-        await db.auth.signOut();
+        // "local": only this browser. The default ("global") would end every
+        // device's session, and /sign-out is reachable by a plain link.
+        await db.auth.signOut({ scope: "local" });
       },
 
       async currentUserId() {

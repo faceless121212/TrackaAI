@@ -64,7 +64,7 @@ Real Stripe was skipped by decision (2026-09-29): billing is **simulated**, and 
 - Public `/pricing` page; billing settings page with usage; owner-only simulated checkout (upgrade) and downgrade; upgrade prompts where limits block.
 - Swapping in Stripe later: Checkout replaces the simulated checkout page, and a signed webhook calls `set_team_plan` with the service role instead of the owner.
 
-## M7 — AI I: Task writer & breakdown
+## M7 — AI I: Task writer & breakdown ✅
 - AI SDK + `@ai-sdk/anthropic`; `ai_usage` metering.
 - Task writer: streamed structured output into the create dialog.
 - Breakdown agent: preview sub-tasks → create.

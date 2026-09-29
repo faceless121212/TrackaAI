@@ -15,7 +15,7 @@ This file holds the detailed, task-level plan for the **current** milestone. Eac
 | M4 — Supabase (hosted, no Docker) | ✅ Done |
 | M5 — Emails (Resend) | ⏭️ Skipped (decision) |
 | M6 — Plans & billing (simulated) | ✅ Done |
-| M7 — AI I: task writer & breakdown | 🚧 In progress |
+| M7 — AI I: task writer & breakdown | ✅ Done |
 | M8 — AI II: board copilot | — |
 | M9 — AI III: AI teammate | — |
 | M10 — Hardening & launch | — |
@@ -15401,6 +15401,17 @@ Gotchas:
 5. Route handlers with auth, access, plan checks and usage logging.
 6. UI: "Write with AI" in the create dialog (labels become selectable), "Break down" dialog and a sub-tasks list in the task sheet; `createSubtasksAction`.
 7. E2E with the mock model; one live call against Anthropic; docs; pre-PR review → PR → auto-merge.
+
+### Build record
+
+Shipped as planned. Verified live against Anthropic (a task draft with acceptance criteria and a matched label; a 6-step breakdown), with the run logged in `ai_usage` with its tokens.
+
+Gotchas:
+1. AI SDK v7 replaced `streamObject` with `streamText({ output: Output.object(...) })`, and `system` with `instructions`; `useObject` still reads a plain text stream (`createTextStreamResponse` + `toTextStream`).
+2. `useObject` reports a failed response by throwing its body text, so the routes answer failures as JSON (`{ error, upgradeHref }`) and the client parses it to show "See plans" when the month's AI runs are used up.
+3. Usage is recorded in `after()`, once the stream has finished: route-handler `after` callbacks can still use cookies, which the Supabase client needs.
+4. Proxy's matcher skips `/api`, so the AI routes rely on the guards (`notFound()`/`redirect()` work in route handlers).
+5. The limit is checked before a run starts, so simultaneous runs can go a run or two over the monthly limit. That's accepted: it's a soft limit on cost, not a security boundary.
 
 ## Next up: M8
 

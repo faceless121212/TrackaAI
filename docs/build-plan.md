@@ -16,7 +16,7 @@ This file holds the detailed, task-level plan for the **current** milestone. Eac
 | M5 — Emails (Resend) | ⏭️ Skipped (decision) |
 | M6 — Plans & billing (simulated) | ✅ Done |
 | M7 — AI I: task writer & breakdown | ✅ Done |
-| M8 — AI II: board copilot | — |
+| M8 — AI II: board copilot | 🚧 In progress |
 | M9 — AI III: AI teammate | — |
 | M10 — Hardening & launch | — |
 
@@ -15416,6 +15416,27 @@ Gotchas:
 7. The dev server keeps the repositories on `globalThis` across hot reloads, so a changed repository interface needs a dev-server restart.
 8. Known limitation: sub-tasks are created one by one; if one fails midway, the ones before it stay.
 
-## Next up: M8
+---
 
-Board copilot (side-panel chat with tools and confirm cards), once M7 is merged.
+# M8 — AI II: board copilot — Plan
+
+**Goal:** A side panel on the board where you chat with an assistant that can search the board, summarize it, and create, update, move and assign tasks. Reads run immediately; **every change shows a confirm card** and runs only after you approve it, with your own permissions. Pro plan only (PRD §5.5).
+
+**Architecture:**
+- `/api/ai/copilot`: `useChat` + `streamText` with tools (AI SDK v7), model `claude-sonnet-5`.
+- `toolApproval: 'user-approval'` on the four mutating tools. Approvals are HMAC-signed with `TOOL_APPROVAL_SECRET` (`experimental_toolApprovalSecret`), so a client can't replay a forged approval from the chat history it sends.
+- Tools are built per request from the caller's repositories and board (`src/server/ai/copilot/tools.ts`). They resolve names (column, member, label) and task keys on the server, reject anything outside the current board, and run the same checks as the server actions (`assertTaskRefs`).
+- Every request reserves a run (`start_ai_run`, feature `copilot`), like M7. Non-Pro teams get a 402 with the upgrade path.
+- Board content (task titles and descriptions written by teammates) is untrusted: the instructions say so, and nothing changes without a confirm click anyway.
+
+**Tasks:**
+1. `copilot` feature: domain + migration (ai_usage check constraint) + test.
+2. Copilot tools with unit tests against the mock repositories.
+3. Instructions (board context) + route handler (auth, access, Pro gate, run reservation, signed approvals, step limit).
+4. Mock copilot model for e2e (a tool call on "move …", text otherwise).
+5. UI: "Copilot" button in the board header → side sheet with messages, confirm cards (Approve / Deny) and result lines; the board refreshes after a change.
+6. E2E (mock), one live run, docs, pre-PR review → PR → auto-merge.
+
+## Next up: M9
+
+AI teammate (assignable agent members and background runs), once M8 is merged.

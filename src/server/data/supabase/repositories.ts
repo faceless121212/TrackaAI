@@ -5,6 +5,7 @@ import {
   DEFAULT_COLUMNS,
   DEFAULT_LABELS,
   INVITE_TTL_DAYS,
+  planSchema,
   positionAt,
   type Assignee,
   type Board,
@@ -13,6 +14,7 @@ import {
   type Invite,
   type Label,
   type Membership,
+  type PlanResource,
   type Task,
   type Team,
   type Theme,
@@ -20,7 +22,7 @@ import {
   type User,
   type Workspace,
 } from "@/lib/domain";
-import { ConflictError, NotFoundError } from "../errors";
+import { ConflictError, NotFoundError, PlanLimitError } from "../errors";
 import type { Repositories } from "../types";
 import type { Database } from "./database.types";
 
@@ -165,6 +167,9 @@ function toError(error: PostgrestError): Error {
   }
   if (error.message === "invite_email_mismatch") {
     return new ConflictError("email", `This invite was sent to ${error.details}`);
+  }
+  if (error.message === "plan_limit_reached") {
+    return new PlanLimitError(planSchema.parse(error.hint), error.details as PlanResource);
   }
   if (RAISED[error.message]) return RAISED[error.message]();
   // PGRST116: .single() found no row — RLS hid it or it doesn't exist.
@@ -369,6 +374,15 @@ export function createSupabaseRepositories(client: () => Promise<Client>): Repos
       async update(id, patch) {
         const db = await client();
         return toTeam(data(await db.from("teams").update({ name: patch.name }).eq("id", id).select("*").single()));
+      },
+      async setPlan(id, plan) {
+        const db = await client();
+        return toTeam(data(await db.rpc("set_team_plan", { p_team: id, p_plan: plan }).single()));
+      },
+      async usage(id) {
+        const db = await client();
+        const row = data(await db.rpc("team_usage", { p_team: id }).single());
+        return { members: row.members, pendingInvites: row.pending_invites, workspaces: row.workspaces };
       },
       async delete(id) {
         const db = await client();

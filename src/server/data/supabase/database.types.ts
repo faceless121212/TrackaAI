@@ -52,6 +52,14 @@ export type Database = {
         Args: { p_name: string; p_slug: string; p_labels?: Json; p_actor?: string };
         Returns: Database["public"]["Tables"]["teams"]["Row"];
       };
+      set_team_plan: {
+        Args: { p_team: string; p_plan: string; p_actor?: string };
+        Returns: Database["public"]["Tables"]["teams"]["Row"];
+      };
+      team_usage: {
+        Args: { p_team: string };
+        Returns: { members: number; pending_invites: number; workspaces: number }[];
+      };
       invite_preview: {
         Args: { p_token: string };
         Returns: { invite: Json; team_name: string; team_slug: string; inviter_name: string | null }[];

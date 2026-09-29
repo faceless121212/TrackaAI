@@ -32,4 +32,4 @@ export function getRepositories(): Repositories {
 }
 
 export type * from "./types";
-export { ConflictError, NotFoundError } from "./errors";
+export { ConflictError, NotFoundError, PlanLimitError } from "./errors";

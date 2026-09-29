@@ -2,7 +2,7 @@
 -- src/server/data/mock/seed.ts). Safe to re-run: it does nothing if the demo
 -- account already exists. Development projects only — the password is public.
 --
---   demo@trackaai.test / demo-password   owner of "Acme" with a populated board
+--   demo@trackaai.test / demo-password   owner of "Acme" (Pro) with a populated board
 --   mate@trackaai.test / demo-password   no team yet (invite and isolation tests)
 
 do $$
@@ -51,6 +51,8 @@ begin
     '[{"name":"Bug","color":"red"},{"name":"Feature","color":"purple"},{"name":"Improvement","color":"blue"},{"name":"Docs","color":"gray"}]',
     v_demo
   );
+  -- The demo team shows every feature; new teams start on Free.
+  update public.teams set plan = 'pro' where id = v_team;
   insert into public.workspaces (team_id, name, key_prefix) values (v_team, 'Engineering', 'ENG') returning id into v_workspace;
   select id into v_board from public.create_board(
     v_workspace, 'Engineering', null,

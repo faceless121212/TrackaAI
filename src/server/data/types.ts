@@ -14,6 +14,7 @@ import type {
   Label,
   LabelInput,
   Membership,
+  Plan,
   Role,
   SignInInput,
   SignUpInput,
@@ -30,6 +31,9 @@ import type {
 } from "@/lib/domain";
 
 export type TeamMember = Membership & { user: User };
+
+/** What counts toward plan limits. Pending invites hold a seat until they expire. */
+export type TeamUsage = { members: number; pendingInvites: number; workspaces: number };
 
 export type InvitePreview = { invite: Invite; teamName: string; teamSlug: string; inviterName: string | null };
 
@@ -69,6 +73,13 @@ export interface TeamsRepo {
   getBySlug(slug: string): Promise<Team | null>;
   listForUser(userId: string): Promise<Team[]>;
   update(id: string, patch: UpdateTeamInput): Promise<Team>;
+  /**
+   * Changes the team's plan. Billing is simulated: this is what a completed
+   * checkout does. Callers check that the actor owns the team.
+   */
+  setPlan(id: string, plan: Plan): Promise<Team>;
+  /** Seats and projects in use. Readable by members and by someone holding a pending invite. */
+  usage(id: string): Promise<TeamUsage>;
   /** Deletes the team with its memberships, invites, labels and every workspace. */
   delete(id: string): Promise<void>;
 }

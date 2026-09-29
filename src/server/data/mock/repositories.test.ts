@@ -7,10 +7,12 @@ import { createMockRepositories } from "./repositories";
 import { createMemoryStore } from "./store";
 
 let repos: Repositories;
+let store: ReturnType<typeof createMemoryStore>;
 let owner: User;
 
 beforeEach(async () => {
-  repos = createMockRepositories(createMemoryStore(emptyDb()));
+  store = createMemoryStore(emptyDb());
+  repos = createMockRepositories(store);
   ({ user: owner } = await repos.auth.signUp({ name: "Owner", email: "owner@example.test", password: "password1" }));
 });
 
@@ -72,7 +74,7 @@ describe("auth", () => {
 describe("teams", () => {
   it("makes the creator the owner", async () => {
     const team = await repos.teams.create({ name: "Acme", slug: "acme", ownerId: owner.id });
-    expect(team.plan).toBe("lite");
+    expect(team.plan).toBe("free");
     expect(await repos.memberships.get(team.id, owner.id)).toMatchObject({ role: "owner" });
     expect(await repos.teams.listForUser(owner.id)).toEqual([team]);
     expect(await repos.teams.getBySlug("acme")).toEqual(team);
@@ -85,6 +87,27 @@ describe("teams", () => {
       .catch((e: unknown) => e);
     expect(error).toBeInstanceOf(ConflictError);
     expect((error as ConflictError).field).toBe("slug");
+  });
+});
+
+describe("plans", () => {
+  it("starts teams on Free and switches plans", async () => {
+    const team = await repos.teams.create({ name: "Acme", slug: "acme", ownerId: owner.id });
+    expect(team.plan).toBe("free");
+    expect((await repos.teams.setPlan(team.id, "pro")).plan).toBe("pro");
+    expect((await repos.teams.get(team.id))?.plan).toBe("pro");
+  });
+
+  it("counts members, live pending invites and workspaces", async () => {
+    const { team } = await setupBoard();
+    await repos.workspaces.create({ teamId: team.id, name: "Ops", keyPrefix: "OPS" });
+    await joinTeam(team.id, "mate@example.test");
+    await repos.invites.create({ teamId: team.id, emails: ["a@example.test", "b@example.test"], invitedBy: owner.id });
+    const [expired] = await repos.invites.create({ teamId: team.id, emails: ["old@example.test"], invitedBy: owner.id });
+    await store.write((db) => {
+      db.invites.find((i) => i.id === expired.id)!.expiresAt = new Date(Date.now() - 1000).toISOString();
+    });
+    expect(await repos.teams.usage(team.id)).toEqual({ members: 2, pendingInvites: 2, workspaces: 2 });
   });
 });
 

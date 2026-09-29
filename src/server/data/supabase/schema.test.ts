@@ -1,6 +1,7 @@
 // @vitest-environment node
 import type { PGlite, Transaction } from "@electric-sql/pglite";
 import { beforeAll, describe, expect, it } from "vitest";
+import { PLAN_CATALOG, PLANS } from "@/lib/domain";
 import { asUser, createTestDb, createUser } from "./pglite-harness";
 
 type Db = PGlite | Transaction;
@@ -23,10 +24,13 @@ async function count(db: Db, table: string): Promise<number> {
   return (await one<{ n: number }>(db, `select count(*)::int as n from ${table}`)).n;
 }
 
-/** A user with their own team, workspace, board (2 columns), label and one task. */
-async function makeTeam(db: PGlite, slug: string) {
+/**
+ * A user with their own team, workspace, board (2 columns), label and one task.
+ * On Pro unless `plan` says otherwise, so limits only matter where tested.
+ */
+async function makeTeam(db: PGlite, slug: string, plan = "pro") {
   const owner = await createUser(db, `${slug}-owner@example.test`, `${slug} owner`);
-  return asUser(db, owner, async (tx) => {
+  const created = await asUser(db, owner, async (tx) => {
     const team = await one<{ id: string }>(tx, "select * from create_team($1, $2, $3)", [slug, slug, LABELS]);
     const workspace = await one<{ id: string }>(
       tx,
@@ -48,6 +52,8 @@ async function makeTeam(db: PGlite, slug: string) {
     );
     return { owner, team: team.id, workspace: workspace.id, board: board.id, column: column.id, label: label.id, task };
   });
+  await db.query("update teams set plan = $1 where id = $2", [plan, created.team]);
+  return created;
 }
 
 async function invite(db: PGlite, team: Awaited<ReturnType<typeof makeTeam>>, email: string, role = "member") {
@@ -479,9 +485,9 @@ describe("row-level security: write boundaries", () => {
   it("lets managers rename the team but not change its plan", async () => {
     await asUser(db, b.owner, (tx) => tx.query("update teams set name = 'Delta' where id = $1", [b.team]));
     await expect(
-      asUser(db, b.owner, (tx) => tx.query("update teams set plan = 'pro' where id = $1", [b.team])),
+      asUser(db, b.owner, (tx) => tx.query("update teams set plan = 'free' where id = $1", [b.team])),
     ).rejects.toThrow(/permission denied/);
-    expect(await one(db, "select name, plan from teams where id = $1", [b.team])).toEqual({ name: "Delta", plan: "lite" });
+    expect(await one(db, "select name, plan from teams where id = $1", [b.team])).toEqual({ name: "Delta", plan: "pro" });
   });
 
   it("keeps task numbers, keys and authors fixed", async () => {
@@ -518,6 +524,93 @@ describe("row-level security: write boundaries", () => {
     await db.query("delete from memberships where team_id = $1 and user_id = $2", [b.team, adminB]);
     await asUser(db, memberB, (tx) => tx.query("update tasks set title = 'Still editable' where id = $1", [b.task.id]));
     expect(await one(db, "select title from tasks where id = $1", [b.task.id])).toEqual({ title: "Still editable" });
+  });
+});
+
+describe("plans and limits", () => {
+  let db: PGlite;
+  beforeAll(async () => {
+    db = await createTestDb();
+  });
+
+  const setPlan = (team: Awaited<ReturnType<typeof makeTeam>>, plan: string) =>
+    asUser(db, team.owner, (tx) => tx.query("select * from set_team_plan($1, $2)", [team.team, plan]));
+  const addWorkspace = (team: Awaited<ReturnType<typeof makeTeam>>, prefix: string) =>
+    asUser(db, team.owner, (tx) =>
+      tx.query("insert into workspaces (team_id, name, key_prefix) values ($1, $2, $2)", [team.team, prefix]),
+    );
+
+  it("matches the plan catalog in src/lib/domain/plans.ts", async () => {
+    for (const plan of PLANS) {
+      for (const [resource, limit] of Object.entries(PLAN_CATALOG[plan].limits)) {
+        const row = await one<{ limit: number | null }>(db, "select private.plan_limit($1, $2) as limit", [plan, resource]);
+        expect({ plan, resource, limit: row.limit }).toEqual({ plan, resource, limit });
+      }
+    }
+  });
+
+  it("starts teams on Free and lets only the owner change the plan", async () => {
+    const t = await makeTeam(db, "planned", "free");
+    expect(await one(db, "select plan from teams where id = $1", [t.team])).toEqual({ plan: "free" });
+    const admin = await createUser(db, "planned-admin@example.test");
+    await setPlan(t, "lite");
+    const token = await invite(db, t, "planned-admin@example.test", "admin");
+    await asUser(db, admin, (tx) => tx.query("select * from accept_invite($1)", [token]));
+    await expect(
+      asUser(db, admin, (tx) => tx.query("select * from set_team_plan($1, 'pro')", [t.team])),
+    ).rejects.toThrow(/not_owner/);
+    await expect(setPlan(t, "enterprise")).rejects.toThrow(/check constraint/);
+    expect(await one(db, "select plan from teams where id = $1", [t.team])).toEqual({ plan: "lite" });
+  });
+
+  it("keeps a Free team to one project and one person", async () => {
+    const t = await makeTeam(db, "solo", "free");
+    await expect(addWorkspace(t, "OPS")).rejects.toThrow(/plan_limit_reached/);
+    await expect(invite(db, t, "friend@example.test")).rejects.toThrow(/plan_limit_reached/);
+  });
+
+  it("lets a Lite team hold three people, counting live invites", async () => {
+    const t = await makeTeam(db, "trio", "free");
+    await setPlan(t, "lite");
+    const mate = await createUser(db, "trio-mate@example.test");
+    const token = await invite(db, t, "trio-mate@example.test");
+    await invite(db, t, "trio-pending@example.test");
+    await asUser(db, mate, (tx) => tx.query("select * from accept_invite($1)", [token]));
+    await expect(invite(db, t, "trio-fourth@example.test")).rejects.toThrow(/plan_limit_reached/);
+
+    // An expired invite frees its seat.
+    await db.query("update invites set expires_at = now() - interval '1 day' where email = 'trio-pending@example.test'");
+    await invite(db, t, "trio-fourth@example.test");
+    for (const prefix of ["AA", "AB", "AC", "AD", "AE", "AF", "AG", "AH", "AI"]) await addWorkspace(t, prefix);
+    await expect(addWorkspace(t, "AJ")).rejects.toThrow(/plan_limit_reached/);
+  });
+
+  it("keeps data after a downgrade but blocks new invites, joins and projects", async () => {
+    const t = await makeTeam(db, "shrunk", "free");
+    await setPlan(t, "pro");
+    const late = await createUser(db, "shrunk-late@example.test");
+    const token = await invite(db, t, "shrunk-late@example.test");
+    await addWorkspace(t, "OPS");
+    await setPlan(t, "free");
+    expect(await count(db, `workspaces where team_id = '${t.team}'`)).toBe(2);
+    await expect(
+      asUser(db, late, (tx) => tx.query("select * from accept_invite($1)", [token])),
+    ).rejects.toThrow(/plan_limit_reached/);
+    await expect(addWorkspace(t, "MKT")).rejects.toThrow(/plan_limit_reached/);
+  });
+
+  it("shows usage to members and invitees only", async () => {
+    const t = await makeTeam(db, "counted", "free");
+    await setPlan(t, "lite");
+    const invitee = await createUser(db, "counted-invitee@example.test");
+    const stranger = await createUser(db, "counted-stranger@example.test");
+    await invite(db, t, "counted-invitee@example.test");
+    const expected = { members: 1, pending_invites: 1, workspaces: 1 };
+    expect(await asUser(db, t.owner, (tx) => one(tx, "select * from team_usage($1)", [t.team]))).toEqual(expected);
+    expect(await asUser(db, invitee, (tx) => one(tx, "select * from team_usage($1)", [t.team]))).toEqual(expected);
+    await expect(
+      asUser(db, stranger, (tx) => tx.query("select * from team_usage($1)", [t.team])),
+    ).rejects.toThrow(/forbidden/);
   });
 });
 

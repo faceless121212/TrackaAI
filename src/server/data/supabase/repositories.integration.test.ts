@@ -5,7 +5,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { DEFAULT_COLUMNS, DEFAULT_LABELS, createTaskInputSchema } from "@/lib/domain";
-import { ConflictError, NotFoundError } from "../errors";
+import { ConflictError, NotFoundError, PlanLimitError } from "../errors";
 import type { Database } from "./database.types";
 import { createSupabaseRepositories } from "./repositories";
 
@@ -67,6 +67,17 @@ describe.skipIf(!url || !key)("Supabase repositories (live project)", () => {
     await expect(
       demo.repos.teams.create({ name: "Dup", slug, ownerId: demo.user.id }),
     ).rejects.toBeInstanceOf(ConflictError);
+  });
+
+  it("starts on Free, enforces its limits and lets the owner change plans", async () => {
+    expect((await demo.repos.teams.get(teamId))?.plan).toBe("free");
+    await expect(
+      demo.repos.invites.create({ teamId, emails: [`solo-${suffix}@example.test`], invitedBy: demo.user.id }),
+    ).rejects.toBeInstanceOf(PlanLimitError);
+    expect((await demo.repos.teams.setPlan(teamId, "lite")).plan).toBe("lite");
+    expect(await demo.repos.teams.usage(teamId)).toMatchObject({ members: 1, pendingInvites: 0 });
+    // Pro for the rest of the suite, so limits don't mask the checks below.
+    await demo.repos.teams.setPlan(teamId, "pro");
   });
 
   it("runs the whole board lifecycle", async () => {

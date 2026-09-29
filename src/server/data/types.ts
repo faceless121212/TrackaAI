@@ -179,18 +179,18 @@ export interface InvitesRepo {
   accept(token: string, userId: string): Promise<Membership>;
 }
 
-export type AiUsageInput = {
-  teamId: string;
-  userId: string;
-  feature: AiFeature;
-  model: string;
-  inputTokens: number;
-  outputTokens: number;
-};
+export type AiRunInput = { teamId: string; userId: string; feature: AiFeature; model: string };
+export type AiUsageRow = AiRunInput & { id: string; inputTokens: number; outputTokens: number; createdAt: string };
 
 export interface AiUsageRepo {
-  /** Logs one AI run (as the signed-in user). */
-  record(input: AiUsageInput): Promise<void>;
+  /**
+   * Reserves one AI run before the model is called: throws PlanLimitError if
+   * the team has used this month's runs, atomically (parallel calls can't all
+   * slip under the limit). Returns the run's id.
+   */
+  startRun(input: AiRunInput): Promise<string>;
+  /** Records the run's tokens (once, by the user who started it). */
+  finishRun(runId: string, usage: { inputTokens: number; outputTokens: number }): Promise<void>;
   /** The team's runs since `since` (plan limits count the calendar month). */
   countSince(teamId: string, since: Date): Promise<number>;
 }

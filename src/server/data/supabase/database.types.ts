@@ -76,6 +76,14 @@ export type Database = {
         Args: { p_team: string; p_plan: string; p_actor?: string };
         Returns: Database["public"]["Tables"]["teams"]["Row"];
       };
+      start_ai_run: {
+        Args: { p_team: string; p_feature: string; p_model: string; p_actor?: string };
+        Returns: string;
+      };
+      finish_ai_run: {
+        Args: { p_run: string; p_input: number; p_output: number; p_actor?: string };
+        Returns: undefined;
+      };
       team_usage: {
         Args: { p_team: string };
         Returns: { members: number; pending_invites: number; workspaces: number }[];

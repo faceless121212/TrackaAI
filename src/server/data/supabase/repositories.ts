@@ -831,17 +831,16 @@ export function createSupabaseRepositories(client: () => Promise<Client>): Repos
     },
 
     aiUsage: {
-      async record(input) {
+      async startRun(input) {
+        const db = await client();
+        return data(
+          await db.rpc("start_ai_run", { p_team: input.teamId, p_feature: input.feature, p_model: input.model }),
+        );
+      },
+      async finishRun(runId, usage) {
         const db = await client();
         check(
-          await db.from("ai_usage").insert({
-            team_id: input.teamId,
-            user_id: input.userId,
-            feature: input.feature,
-            model: input.model,
-            input_tokens: input.inputTokens,
-            output_tokens: input.outputTokens,
-          }),
+          await db.rpc("finish_ai_run", { p_run: runId, p_input: usage.inputTokens, p_output: usage.outputTokens }),
         );
       },
       async countSince(teamId, since) {

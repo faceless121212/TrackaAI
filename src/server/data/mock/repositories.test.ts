@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_COLUMNS, DEFAULT_LABELS, createTaskInputSchema, type User } from "@/lib/domain";
-import { ConflictError, NotFoundError } from "../errors";
+import { ConflictError, NotFoundError, PlanLimitError } from "../errors";
 import type { Repositories } from "../types";
 import { emptyDb } from "./db";
 import { createMockRepositories } from "./repositories";
@@ -112,15 +112,26 @@ describe("plans", () => {
 });
 
 describe("AI usage", () => {
-  it("records runs and counts a team's runs since a date", async () => {
+  it("reserves runs, counts a team's runs since a date and records tokens once", async () => {
     const team = await repos.teams.create({ name: "Acme", slug: "acme", ownerId: owner.id });
     const other = await repos.teams.create({ name: "Other", slug: "other", ownerId: owner.id });
-    const run = { userId: owner.id, feature: "task_writer" as const, model: "m", inputTokens: 10, outputTokens: 20 };
-    await repos.aiUsage.record({ ...run, teamId: team.id });
-    await repos.aiUsage.record({ ...run, teamId: team.id, feature: "breakdown" });
-    await repos.aiUsage.record({ ...run, teamId: other.id });
+    const run = { userId: owner.id, feature: "task_writer" as const, model: "m" };
+    const id = await repos.aiUsage.startRun({ ...run, teamId: team.id });
+    await repos.aiUsage.startRun({ ...run, teamId: team.id, feature: "breakdown" });
+    await repos.aiUsage.startRun({ ...run, teamId: other.id });
     expect(await repos.aiUsage.countSince(team.id, new Date(Date.now() - 60_000))).toBe(2);
     expect(await repos.aiUsage.countSince(team.id, new Date(Date.now() + 60_000))).toBe(0);
+
+    await repos.aiUsage.finishRun(id, { inputTokens: 10, outputTokens: 20 });
+    await repos.aiUsage.finishRun(id, { inputTokens: 1, outputTokens: 1 });
+    expect((await store.read((db) => db.aiUsage.find((u) => u.id === id)))?.inputTokens).toBe(10);
+  });
+
+  it("refuses a run past the plan's monthly limit", async () => {
+    const team = await repos.teams.create({ name: "Acme", slug: "acme", ownerId: owner.id });
+    const run = { teamId: team.id, userId: owner.id, feature: "task_writer" as const, model: "m" };
+    for (let i = 0; i < 10; i++) await repos.aiUsage.startRun(run);
+    await expect(repos.aiUsage.startRun(run)).rejects.toBeInstanceOf(PlanLimitError);
   });
 });
 

@@ -664,36 +664,53 @@ describe("AI usage", () => {
   let b: Awaited<ReturnType<typeof makeTeam>>;
   beforeAll(async () => {
     db = await createTestDb();
-    a = await makeTeam(db, "ai-alpha");
+    a = await makeTeam(db, "ai-alpha", "free");
     b = await makeTeam(db, "ai-beta");
   });
 
-  const record = (userId: string, teamId: string, actor = userId) =>
+  const startRun = (actor: string, teamId: string) =>
     asUser(db, actor, (tx) =>
-      tx.query(
-        "insert into ai_usage (team_id, user_id, feature, model, input_tokens, output_tokens) values ($1, $2, 'task_writer', 'm', 1, 2)",
-        [teamId, userId],
-      ),
+      one<{ id: string }>(tx, "select start_ai_run($1, 'task_writer', 'm') as id", [teamId]),
     );
 
-  it("lets members log their own runs and read their team's usage only", async () => {
-    await record(a.owner, a.team);
-    expect(await asUser(db, a.owner, (tx) => count(tx, `ai_usage where team_id = '${a.team}'`))).toBe(1);
-    expect(await asUser(db, b.owner, (tx) => count(tx, `ai_usage where team_id = '${a.team}'`))).toBe(0);
+  it("reserves runs up to the plan's monthly limit, then refuses", async () => {
+    for (let i = 0; i < 10; i++) await startRun(a.owner, a.team);
+    await expect(startRun(a.owner, a.team)).rejects.toThrow(/plan_limit_reached/);
+    // Last month's runs don't count.
+    await db.query("update ai_usage set created_at = now() - interval '40 days' where team_id = $1", [a.team]);
+    await startRun(a.owner, a.team);
   });
 
-  it("refuses runs logged for another team or as someone else", async () => {
-    await expect(record(b.owner, a.team)).rejects.toThrow(/row-level security/);
-    await expect(record(b.owner, b.team, a.owner)).rejects.toThrow(/row-level security/);
+  it("records tokens once, for the caller's own run", async () => {
+    const run = await startRun(b.owner, b.team);
+    await asUser(db, b.owner, (tx) => tx.query("select finish_ai_run($1, 120, 45)", [run.id]));
+    await asUser(db, b.owner, (tx) => tx.query("select finish_ai_run($1, 1, 1)", [run.id]));
+    expect(await one(db, "select input_tokens, output_tokens from ai_usage where id = $1", [run.id])).toEqual({
+      input_tokens: 120,
+      output_tokens: 45,
+    });
+    await asUser(db, a.owner, (tx) => tx.query("select finish_ai_run($1, 999, 999)", [run.id]));
+    expect(await one(db, "select input_tokens from ai_usage where id = $1", [run.id])).toEqual({ input_tokens: 120 });
   });
 
-  it("never lets anyone erase or edit usage", async () => {
+  it("only lets members start runs, and reads stay inside the team", async () => {
+    await expect(startRun(a.owner, b.team)).rejects.toThrow(/forbidden/);
+    expect(await asUser(db, a.owner, (tx) => count(tx, `ai_usage where team_id = '${b.team}'`))).toBe(0);
+    expect(await asUser(db, b.owner, (tx) => count(tx, `ai_usage where team_id = '${b.team}'`))).toBe(1);
+  });
+
+  it("never lets anyone write, edit or erase usage directly", async () => {
     await expect(
-      asUser(db, a.owner, (tx) => tx.query("delete from ai_usage where team_id = $1", [a.team])),
+      asUser(db, b.owner, (tx) =>
+        tx.query(
+          "insert into ai_usage (team_id, user_id, feature, model) values ($1, $2, 'task_writer', 'm')",
+          [b.team, b.owner],
+        ),
+      ),
     ).rejects.toThrow(/permission denied/);
-    await expect(
-      asUser(db, a.owner, (tx) => tx.query("update ai_usage set input_tokens = 0 where team_id = $1", [a.team])),
-    ).rejects.toThrow(/permission denied/);
+    for (const sql of ["delete from ai_usage", "update ai_usage set input_tokens = 0"]) {
+      await expect(asUser(db, b.owner, (tx) => tx.query(sql))).rejects.toThrow(/permission denied/);
+    }
   });
 });
 

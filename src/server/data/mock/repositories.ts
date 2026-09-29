@@ -1,6 +1,8 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { generateNKeysBetween } from "fractional-indexing";
 import {
+  canAdd,
+  monthStart,
   DEFAULT_COLUMNS,
   DEFAULT_LABELS,
   INVITE_TTL_DAYS,
@@ -14,7 +16,7 @@ import {
   type Task,
   type User,
 } from "@/lib/domain";
-import { ConflictError, NotFoundError } from "../errors";
+import { ConflictError, NotFoundError, PlanLimitError } from "../errors";
 import type { Repositories } from "../types";
 import type { MockDb } from "./db";
 import { hashPassword, verifyPassword } from "./password";
@@ -483,9 +485,20 @@ export function createMockRepositories(store: MockStore, session: SessionStore =
     },
 
     aiUsage: {
-      record: (input) =>
+      startRun: (input) =>
         store.write((db) => {
-          db.aiUsage.push({ ...input, id: newId(), createdAt: now() });
+          const team = find(db.teams, (t) => t.id === input.teamId, "Team", input.teamId);
+          const since = monthStart().toISOString();
+          const used = db.aiUsage.filter((u) => u.teamId === team.id && u.createdAt >= since).length;
+          if (!canAdd(team.plan, "aiRuns", used)) throw new PlanLimitError(team.plan, "aiRuns");
+          const run = { ...input, id: newId(), inputTokens: 0, outputTokens: 0, createdAt: now() };
+          db.aiUsage.push(run);
+          return run.id;
+        }),
+      finishRun: (runId, usage) =>
+        store.write((db) => {
+          const run = db.aiUsage.find((u) => u.id === runId);
+          if (run && run.inputTokens === 0 && run.outputTokens === 0) Object.assign(run, usage);
         }),
       countSince: (teamId, since) =>
         store.read(

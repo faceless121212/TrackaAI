@@ -150,6 +150,8 @@ const RAISED: Record<string, () => Error> = {
   column_not_found: () => new NotFoundError("Column", "id"),
   membership_not_found: () => new NotFoundError("Membership", "id"),
   label_not_in_team: () => new ConflictError("labelIds", "Unknown label"),
+  parent_not_found: () => new NotFoundError("Task", "parentId"),
+  assignee_not_member: () => new ConflictError("assignee", "That person isn't a member of this team"),
   not_owner: () => new ConflictError("owner", "Only the owner can transfer ownership"),
 };
 

@@ -300,7 +300,7 @@ describe("row-level security: cross-team isolation", () => {
       asUser(db, b.owner, (tx) =>
         tx.query("update tasks set board_id = $1, column_id = $2 where id = $3", [a.board, a.column, bTask]),
       ),
-    ).rejects.toThrow(/row-level security/);
+    ).rejects.toThrow(/permission denied/);
   });
 
   it("shows anonymous visitors nothing", async () => {
@@ -394,6 +394,130 @@ describe("row-level security: roles inside a team", () => {
       tx.query("delete from memberships where team_id = $1 and user_id = $2", [t.team, member]),
     );
     expect(await count(db, `memberships where team_id = '${t.team}' and user_id = '${member}'`)).toBe(0);
+  });
+});
+
+describe("row-level security: write boundaries", () => {
+  let db: PGlite;
+  let a: Awaited<ReturnType<typeof makeTeam>>;
+  let b: Awaited<ReturnType<typeof makeTeam>>;
+  let adminA: string;
+  let adminB: string;
+  let memberB: string;
+
+  beforeAll(async () => {
+    db = await createTestDb();
+    a = await makeTeam(db, "gamma");
+    b = await makeTeam(db, "delta");
+    adminA = await createUser(db, "admin-a@example.test");
+    adminB = await createUser(db, "admin-b@example.test");
+    memberB = await createUser(db, "member-b@example.test");
+    for (const [team, user, email, role] of [
+      [a, adminA, "admin-a@example.test", "admin"],
+      [b, adminB, "admin-b@example.test", "admin"],
+      [b, memberB, "member-b@example.test", "member"],
+    ] as const) {
+      const token = await invite(db, team, email, role);
+      await asUser(db, user, (tx) => tx.query("select * from accept_invite($1)", [token]));
+    }
+  });
+
+  it("doesn't let a manager move memberships into another team", async () => {
+    // Unfiltered: RLS would only check the new row against the update policy.
+    await expect(
+      asUser(db, a.owner, (tx) => tx.query("update memberships set team_id = $1", [b.team])),
+    ).rejects.toThrow(/permission denied/);
+    await expect(
+      asUser(db, a.owner, (tx) => tx.query("update memberships set user_id = $1 where user_id = $2", [a.owner, adminA])),
+    ).rejects.toThrow(/permission denied/);
+    expect(await count(db, `memberships where team_id = '${b.team}' and user_id = '${adminA}'`)).toBe(0);
+  });
+
+  it("lets admins manage members but not other admins", async () => {
+    const other = await createUser(db, "admin-b2@example.test");
+    const token = await invite(db, b, "admin-b2@example.test", "admin");
+    await asUser(db, other, (tx) => tx.query("select * from accept_invite($1)", [token]));
+
+    await asUser(db, adminB, async (tx) => {
+      await tx.query("update memberships set role = 'member' where team_id = $1 and user_id = $2", [b.team, other]);
+      await tx.query("delete from memberships where team_id = $1 and user_id = $2", [b.team, other]);
+    });
+    expect(await one(db, "select role from memberships where team_id = $1 and user_id = $2", [b.team, other])).toEqual({
+      role: "admin",
+    });
+
+    await asUser(db, adminB, (tx) =>
+      tx.query("update memberships set role = 'admin' where team_id = $1 and user_id = $2", [b.team, memberB]),
+    );
+    expect(await one(db, "select role from memberships where team_id = $1 and user_id = $2", [b.team, memberB])).toEqual({
+      role: "admin",
+    });
+    await asUser(db, b.owner, async (tx) => {
+      await tx.query("update memberships set role = 'member' where team_id = $1 and user_id = $2", [b.team, memberB]);
+      await tx.query("delete from memberships where team_id = $1 and user_id = $2", [b.team, other]);
+    });
+    expect(await count(db, `memberships where team_id = '${b.team}' and user_id = '${other}'`)).toBe(0);
+  });
+
+  it("lets users edit their profile but not its email", async () => {
+    await asUser(db, memberB, (tx) => tx.query("update profiles set name = 'Renamed' where id = $1", [memberB]));
+    expect(await one(db, "select name from profiles where id = $1", [memberB])).toEqual({ name: "Renamed" });
+    await expect(
+      asUser(db, memberB, (tx) => tx.query("update profiles set email = 'admin-a@example.test' where id = $1", [memberB])),
+    ).rejects.toThrow(/permission denied/);
+  });
+
+  it("checks the invitee's sign-in email, not their profile", async () => {
+    const token = await invite(db, a, "not-yet@example.test");
+    await db.query("update profiles set email = 'not-yet@example.test' where id = $1", [memberB]);
+    await expect(
+      asUser(db, memberB, (tx) => tx.query("select * from accept_invite($1)", [token])),
+    ).rejects.toThrow(/invite_email_mismatch/);
+    await db.query("update profiles set email = 'member-b@example.test' where id = $1", [memberB]);
+  });
+
+  it("lets managers rename the team but not change its plan", async () => {
+    await asUser(db, b.owner, (tx) => tx.query("update teams set name = 'Delta' where id = $1", [b.team]));
+    await expect(
+      asUser(db, b.owner, (tx) => tx.query("update teams set plan = 'pro' where id = $1", [b.team])),
+    ).rejects.toThrow(/permission denied/);
+    expect(await one(db, "select name, plan from teams where id = $1", [b.team])).toEqual({ name: "Delta", plan: "lite" });
+  });
+
+  it("keeps task numbers, keys and authors fixed", async () => {
+    for (const set of ["key = 'HACK-1'", "number = 99", `created_by = '${memberB}'`, `board_id = '${b.board}'`]) {
+      await expect(
+        asUser(db, memberB, (tx) => tx.query(`update tasks set ${set} where id = $1`, [b.task.id])),
+      ).rejects.toThrow(/permission denied/);
+    }
+  });
+
+  it("keeps a task's column, parent and assignee inside its board and team", async () => {
+    const attempts = [
+      ["update tasks set column_id = $1 where id = $2", [a.column, b.task.id], /column_not_found/],
+      ["update tasks set parent_id = $1 where id = $2", [a.task.id, b.task.id], /parent_not_found/],
+      ["update tasks set assignee_user_id = $1 where id = $2", [a.owner, b.task.id], /assignee_not_member/],
+      [
+        "select * from create_task($1, $2, 'X', '', 'none', null, '{}', null, $3, 'b0')",
+        [b.board, b.column, a.task.id],
+        /parent_not_found/,
+      ],
+      [
+        "select * from create_task($1, $2, 'X', '', 'none', $3, '{}', null, null, 'b0')",
+        [b.board, b.column, a.owner],
+        /assignee_not_member/,
+      ],
+    ] as const;
+    for (const [sql, params, error] of attempts) {
+      await expect(asUser(db, memberB, (tx) => tx.query(sql, [...params]))).rejects.toThrow(error);
+    }
+    // Still fine: assigning a teammate, and editing a task whose assignee has since left.
+    await asUser(db, memberB, (tx) =>
+      tx.query("update tasks set assignee_user_id = $1 where id = $2", [adminB, b.task.id]),
+    );
+    await db.query("delete from memberships where team_id = $1 and user_id = $2", [b.team, adminB]);
+    await asUser(db, memberB, (tx) => tx.query("update tasks set title = 'Still editable' where id = $1", [b.task.id]));
+    expect(await one(db, "select title from tasks where id = $1", [b.task.id])).toEqual({ title: "Still editable" });
   });
 });
 

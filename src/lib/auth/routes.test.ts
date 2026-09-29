@@ -40,7 +40,19 @@ describe("safeNextPath", () => {
     expect(safeNextPath("/acme/board?task=ENG-1")).toBe("/acme/board?task=ENG-1");
   });
 
-  it.each([null, undefined, "", "https://evil.test", "//evil.test", "/\\evil.test", "acme"])(
+  it.each([
+    null,
+    undefined,
+    "",
+    "https://evil.test",
+    "//evil.test",
+    "/\\evil.test",
+    "acme",
+    // Browsers strip tab/CR/LF from URLs, turning these into //evil.test.
+    "/\t/evil.test",
+    "/\n/evil.test",
+    "/\r/evil.test",
+  ])(
     "falls back to / for %s",
     (value) => {
       expect(safeNextPath(value)).toBe("/");

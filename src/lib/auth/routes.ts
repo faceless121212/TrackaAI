@@ -1,10 +1,23 @@
 export const SESSION_COOKIE = "tracka_session";
 export const SIGN_IN_PATH = "/sign-in";
+export const SIGN_UP_PATH = "/sign-up";
+export const SIGN_OUT_PATH = "/sign-out";
 
-const PUBLIC_PATHS = [SIGN_IN_PATH];
+// Signed-in users are bounced from these to "/".
+const PUBLIC_PATHS = [SIGN_IN_PATH, SIGN_UP_PATH];
+// These skip the session check entirely (e.g. clearing a stale cookie).
+const OPEN_PATHS = [SIGN_OUT_PATH];
+
+function matches(paths: string[], pathname: string): boolean {
+  return paths.some((path) => pathname === path || pathname.startsWith(`${path}/`));
+}
 
 export function isPublicPath(pathname: string): boolean {
-  return PUBLIC_PATHS.some((path) => pathname === path || pathname.startsWith(`${path}/`));
+  return matches(PUBLIC_PATHS, pathname);
+}
+
+export function isOpenPath(pathname: string): boolean {
+  return matches(OPEN_PATHS, pathname);
 }
 
 export function signInRedirectPath(pathname: string, search: string): string {

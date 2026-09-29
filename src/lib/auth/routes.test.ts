@@ -1,16 +1,25 @@
 import { describe, expect, it } from "vitest";
-import { isPublicPath, safeNextPath, signInRedirectPath } from "./routes";
+import { isOpenPath, isPublicPath, safeNextPath, signInRedirectPath } from "./routes";
 
 describe("isPublicPath", () => {
-  it("treats sign-in and its sub-paths as public", () => {
+  it("treats sign-in, sign-up and their sub-paths as public", () => {
     expect(isPublicPath("/sign-in")).toBe(true);
     expect(isPublicPath("/sign-in/magic")).toBe(true);
+    expect(isPublicPath("/sign-up")).toBe(true);
   });
 
   it("treats everything else as protected", () => {
     expect(isPublicPath("/")).toBe(false);
     expect(isPublicPath("/sign-inx")).toBe(false);
     expect(isPublicPath("/acme/board")).toBe(false);
+  });
+});
+
+describe("isOpenPath", () => {
+  it("lets /sign-out through regardless of session", () => {
+    expect(isOpenPath("/sign-out")).toBe(true);
+    expect(isOpenPath("/sign-in")).toBe(false);
+    expect(isOpenPath("/")).toBe(false);
   });
 });
 

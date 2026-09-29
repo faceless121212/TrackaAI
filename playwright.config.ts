@@ -1,6 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
 const PORT = 3100;
+const E2E_DB = ".data/e2e-db.json";
 
 export default defineConfig({
   testDir: "./e2e",
@@ -14,7 +15,9 @@ export default defineConfig({
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
-    command: `pnpm build && pnpm start --port ${PORT}`,
+    // Each run starts from a freshly seeded mock db, isolated from local dev data.
+    command: `rm -f ${E2E_DB} && pnpm build && pnpm start --port ${PORT}`,
+    env: { MOCK_DB_PATH: E2E_DB },
     url: `http://localhost:${PORT}/sign-in`,
     reuseExistingServer: !process.env.CI,
     timeout: 180_000,

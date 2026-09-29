@@ -10,6 +10,7 @@ import type {
   User,
   Workspace,
 } from "@/lib/domain";
+import type { AiUsageInput } from "../types";
 
 // Shape of .data/mock-db.json. Mirrors the Supabase tables that arrive in M4.
 export type MockDb = {
@@ -25,6 +26,7 @@ export type MockDb = {
   invites: Invite[];
   labels: Label[];
   comments: Comment[];
+  aiUsage: (AiUsageInput & { id: string; createdAt: string })[];
 };
 
 export function emptyDb(): MockDb {
@@ -41,5 +43,6 @@ export function emptyDb(): MockDb {
     invites: [],
     labels: [],
     comments: [],
+    aiUsage: [],
   };
 }

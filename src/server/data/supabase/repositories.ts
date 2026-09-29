@@ -829,5 +829,31 @@ export function createSupabaseRepositories(client: () => Promise<Client>): Repos
         return toMembership(data(await db.rpc("accept_invite", { p_token: token, p_actor: userId })));
       },
     },
+
+    aiUsage: {
+      async record(input) {
+        const db = await client();
+        check(
+          await db.from("ai_usage").insert({
+            team_id: input.teamId,
+            user_id: input.userId,
+            feature: input.feature,
+            model: input.model,
+            input_tokens: input.inputTokens,
+            output_tokens: input.outputTokens,
+          }),
+        );
+      },
+      async countSince(teamId, since) {
+        const db = await client();
+        const { count, error } = await db
+          .from("ai_usage")
+          .select("id", { count: "exact", head: true })
+          .eq("team_id", teamId)
+          .gte("created_at", since.toISOString());
+        if (error) throw toError(error);
+        return count ?? 0;
+      },
+    },
   };
 }

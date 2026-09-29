@@ -1,4 +1,5 @@
 import type {
+  AiFeature,
   Board,
   Column,
   Comment,
@@ -178,6 +179,22 @@ export interface InvitesRepo {
   accept(token: string, userId: string): Promise<Membership>;
 }
 
+export type AiUsageInput = {
+  teamId: string;
+  userId: string;
+  feature: AiFeature;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+};
+
+export interface AiUsageRepo {
+  /** Logs one AI run (as the signed-in user). */
+  record(input: AiUsageInput): Promise<void>;
+  /** The team's runs since `since` (plan limits count the calendar month). */
+  countSince(teamId: string, since: Date): Promise<number>;
+}
+
 export interface Repositories {
   auth: AuthRepo;
   users: UsersRepo;
@@ -189,4 +206,5 @@ export interface Repositories {
   invites: InvitesRepo;
   labels: LabelsRepo;
   comments: CommentsRepo;
+  aiUsage: AiUsageRepo;
 }

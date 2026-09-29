@@ -658,6 +658,45 @@ describe("plans and limits", () => {
   });
 });
 
+describe("AI usage", () => {
+  let db: PGlite;
+  let a: Awaited<ReturnType<typeof makeTeam>>;
+  let b: Awaited<ReturnType<typeof makeTeam>>;
+  beforeAll(async () => {
+    db = await createTestDb();
+    a = await makeTeam(db, "ai-alpha");
+    b = await makeTeam(db, "ai-beta");
+  });
+
+  const record = (userId: string, teamId: string, actor = userId) =>
+    asUser(db, actor, (tx) =>
+      tx.query(
+        "insert into ai_usage (team_id, user_id, feature, model, input_tokens, output_tokens) values ($1, $2, 'task_writer', 'm', 1, 2)",
+        [teamId, userId],
+      ),
+    );
+
+  it("lets members log their own runs and read their team's usage only", async () => {
+    await record(a.owner, a.team);
+    expect(await asUser(db, a.owner, (tx) => count(tx, `ai_usage where team_id = '${a.team}'`))).toBe(1);
+    expect(await asUser(db, b.owner, (tx) => count(tx, `ai_usage where team_id = '${a.team}'`))).toBe(0);
+  });
+
+  it("refuses runs logged for another team or as someone else", async () => {
+    await expect(record(b.owner, a.team)).rejects.toThrow(/row-level security/);
+    await expect(record(b.owner, b.team, a.owner)).rejects.toThrow(/row-level security/);
+  });
+
+  it("never lets anyone erase or edit usage", async () => {
+    await expect(
+      asUser(db, a.owner, (tx) => tx.query("delete from ai_usage where team_id = $1", [a.team])),
+    ).rejects.toThrow(/permission denied/);
+    await expect(
+      asUser(db, a.owner, (tx) => tx.query("update ai_usage set input_tokens = 0 where team_id = $1", [a.team])),
+    ).rejects.toThrow(/permission denied/);
+  });
+});
+
 describe("function grants", () => {
   it("keeps RLS helpers out of the API schema and away from signed-out visitors", async () => {
     const db = await createTestDb();

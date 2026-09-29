@@ -170,6 +170,7 @@ export function createMockRepositories(store: MockStore, session: SessionStore =
           db.labels = db.labels.filter((l) => l.teamId !== id);
           db.invites = db.invites.filter((i) => i.teamId !== id);
           db.memberships = db.memberships.filter((m) => m.teamId !== id);
+          db.aiUsage = db.aiUsage.filter((u) => u.teamId !== id);
           db.teams = db.teams.filter((t) => t.id !== id);
         }),
     },
@@ -479,6 +480,17 @@ export function createMockRepositories(store: MockStore, session: SessionStore =
           db.memberships.push(membership);
           return membership;
         }),
+    },
+
+    aiUsage: {
+      record: (input) =>
+        store.write((db) => {
+          db.aiUsage.push({ ...input, id: newId(), createdAt: now() });
+        }),
+      countSince: (teamId, since) =>
+        store.read(
+          (db) => db.aiUsage.filter((u) => u.teamId === teamId && u.createdAt >= since.toISOString()).length,
+        ),
     },
   };
 }

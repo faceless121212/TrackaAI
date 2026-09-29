@@ -111,6 +111,19 @@ describe("plans", () => {
   });
 });
 
+describe("AI usage", () => {
+  it("records runs and counts a team's runs since a date", async () => {
+    const team = await repos.teams.create({ name: "Acme", slug: "acme", ownerId: owner.id });
+    const other = await repos.teams.create({ name: "Other", slug: "other", ownerId: owner.id });
+    const run = { userId: owner.id, feature: "task_writer" as const, model: "m", inputTokens: 10, outputTokens: 20 };
+    await repos.aiUsage.record({ ...run, teamId: team.id });
+    await repos.aiUsage.record({ ...run, teamId: team.id, feature: "breakdown" });
+    await repos.aiUsage.record({ ...run, teamId: other.id });
+    expect(await repos.aiUsage.countSince(team.id, new Date(Date.now() - 60_000))).toBe(2);
+    expect(await repos.aiUsage.countSince(team.id, new Date(Date.now() + 60_000))).toBe(0);
+  });
+});
+
 describe("memberships", () => {
   it("changes roles and removes members", async () => {
     const { team } = await setupBoard();

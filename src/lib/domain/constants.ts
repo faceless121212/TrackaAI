@@ -4,8 +4,10 @@ export const DEFAULT_COLUMNS = ["Backlog", "Todo", "In Progress", "In Review", "
 // Top-level routes that a team slug (/[team]) must never shadow.
 export const RESERVED_SLUGS: readonly string[] = [
   "api",
+  "auth",
   "invite",
   "onboarding",
+  "pricing",
   "settings",
   "sign-in",
   "sign-out",

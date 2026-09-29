@@ -3,7 +3,7 @@ import { LABEL_COLORS, MAX_INVITES_PER_BATCH, RESERVED_SLUGS, THEMES } from "./c
 
 export const ROLES = ["owner", "admin", "member"] as const;
 export const PRIORITIES = ["none", "low", "medium", "high", "urgent"] as const;
-export const PLANS = ["lite", "pro"] as const;
+export const PLANS = ["free", "lite", "pro"] as const;
 
 export const idSchema = z.string().min(1);
 export const roleSchema = z.enum(ROLES);

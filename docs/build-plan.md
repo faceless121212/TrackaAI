@@ -8,7 +8,7 @@ This file holds the detailed, task-level plan for the **current** milestone. Eac
 
 | Milestone | Status |
 |---|---|
-| **M0 — Foundation** | 📝 Planned (below) |
+| M0 — Foundation | ✅ Done |
 | M1 — Mock data layer + onboarding | Planned when M0 is merged |
 | M2 — Workspaces, boards & Kanban | — |
 | M3 — Team & user management | — |

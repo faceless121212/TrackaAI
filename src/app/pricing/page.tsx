@@ -10,10 +10,18 @@ import { getRepositories } from "@/server/data";
 
 export const metadata: Metadata = { title: "Pricing" };
 
+/** The team the buttons act on: one the user owns (only owners change plans), else their first. */
+async function billingTeam(userId: string) {
+  const repos = getRepositories();
+  const teams = await repos.teams.listForUser(userId);
+  const roles = await Promise.all(teams.map((t) => repos.memberships.get(t.id, userId)));
+  return teams.find((_, i) => roles[i]?.role === "owner") ?? teams[0];
+}
+
 // Public: works signed in (links to your team's billing) and signed out.
 export default async function PricingPage() {
   const user = await getCurrentUser();
-  const [team] = user ? await getRepositories().teams.listForUser(user.id) : [];
+  const team = user ? await billingTeam(user.id) : undefined;
   const href = team ? settingsPath(team.slug, "billing") : user ? "/" : SIGN_UP_PATH;
 
   const actions = Object.fromEntries(
@@ -41,6 +49,7 @@ export default async function PricingPage() {
         <h1 className="text-3xl font-semibold">Simple plans for every team size</h1>
         <p className="text-muted-foreground">Start free on your own. Upgrade when you bring your team.</p>
       </div>
+      {team && <p className="text-muted-foreground text-center text-sm">Showing plans for {team.name}.</p>}
       <PricingTable current={team?.plan} actions={actions} />
       <p className="text-muted-foreground text-center text-sm">
         Prices are per team, billed monthly. Billing is simulated in this version: no card is charged.

@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { inviteTeammate, openFreshBoard, openSettings, signInAsDemo, upgradeTo } from "./helpers";
+import { inviteTeammate, joinWithInvite, openFreshBoard, openSettings, signInAsDemo, upgradeTo } from "./helpers";
 
 test("the pricing page is public and also works signed in", async ({ page }) => {
   await page.goto("/pricing");
@@ -47,4 +47,45 @@ test("downgrading keeps everything but warns about the limits", async ({ page })
   await page.getByRole("alertdialog").getByRole("button", { name: "Switch to Free" }).click();
   await expect(page.getByText("Your team is above the Free plan's limits")).toBeVisible();
   await expect(page.getByLabel("Free plan")).toContainText("Current plan");
+});
+
+test("after a downgrade, invitees are told to ask the owner and admins see billing read-only", async ({
+  page,
+  browser,
+  baseURL,
+}) => {
+  const id = await openFreshBoard(page);
+  await upgradeTo(page, "Pro");
+  const adminInvite = await inviteTeammate(page, "Admin");
+  const lateInvite = await inviteTeammate(page);
+  const { context: adminContext, page: admin } = await joinWithInvite(browser, baseURL!, adminInvite);
+
+  await openSettings(page, "Billing");
+  await page.getByRole("button", { name: "Switch to Free" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Switch to Free" }).click();
+  await expect(page.getByLabel("Free plan")).toContainText("Current plan");
+
+  // The pending invite can no longer be accepted, and the message fits the invitee.
+  const lateContext = await browser.newContext({ baseURL });
+  const late = await lateContext.newPage();
+  await late.goto(lateInvite.link);
+  await late.getByRole("link", { name: "Sign up" }).click();
+  await late.getByLabel("Name", { exact: true }).fill("Late");
+  await late.getByLabel("Email", { exact: true }).fill(lateInvite.email);
+  await late.getByLabel("Password", { exact: true }).fill("password123");
+  await late.getByRole("button", { name: "Create account" }).click();
+  await late.getByRole("button", { name: /^Join / }).click();
+  await expect(
+    late.getByText(`Team ${id} is full on its current plan. Ask the team owner to upgrade, then try again.`),
+  ).toBeVisible();
+
+  // Admins manage members but not billing.
+  await admin.goto(`/team-${id}/settings/billing`);
+  await expect(admin.getByText("Only the team owner can change the plan.").first()).toBeVisible();
+  await expect(admin.getByRole("link", { name: /^Upgrade to/ })).toHaveCount(0);
+  await admin.goto(`/team-${id}/settings/members`);
+  await expect(admin.getByText(/Ask the team owner to upgrade\./)).toBeVisible();
+
+  await adminContext.close();
+  await lateContext.close();
 });

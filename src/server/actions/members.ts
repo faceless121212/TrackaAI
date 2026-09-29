@@ -6,6 +6,7 @@ import { createInvitesInputSchema, inviteRoleSchema, parseEmailList } from "@/li
 import { formValues, type ActionResult, type FormState } from "@/lib/forms";
 import { requireInviteAccess, requireTeamMember } from "@/server/auth/guards";
 import { assertCan, assignableRoles, canLeaveTeam, canManageMember } from "@/server/auth/permissions";
+import { assertWithinPlan } from "@/server/billing/limits";
 import { getRepositories } from "@/server/data";
 import { assertRoomForInvites, conflictToFormState, deliverInvites, toActionError, zodToFormState } from "./shared";
 
@@ -25,7 +26,7 @@ export async function inviteMembersAction(_prev: FormState, formData: FormData):
     await assertRoomForInvites(team, parsed.data.emails);
     invites = await getRepositories().invites.create({ ...parsed.data, invitedBy: user.id });
   } catch (error) {
-    return conflictToFormState(error, values, team.slug);
+    return conflictToFormState(error, values, { slug: team.slug, role: membership.role });
   }
   await deliverInvites(invites);
   refresh();
@@ -44,8 +45,12 @@ async function requireInviteManager(inviteId: string) {
 
 export async function resendInviteAction(inviteId: string): Promise<ActionResult> {
   try {
-    await requireInviteManager(inviteId);
-    await deliverInvites([await getRepositories().invites.resend(inviteId)]);
+    const { invite } = await requireInviteManager(inviteId);
+    const repos = getRepositories();
+    // An expired invite no longer holds a seat; resending takes one again.
+    const team = await repos.teams.get(invite.teamId);
+    if (team && new Date(invite.expiresAt) <= new Date()) await assertWithinPlan(repos, team, "members");
+    await deliverInvites([await repos.invites.resend(inviteId)]);
   } catch (error) {
     return toActionError(error);
   }

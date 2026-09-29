@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isOpenPath, isPublicPath, safeNextPath, signInRedirectPath, withNext } from "./routes";
+import { isOpenPath, isPublicPath, isSessionOptionalPath, safeNextPath, signInRedirectPath, withNext } from "./routes";
 
 describe("isPublicPath", () => {
   it("treats sign-in, sign-up and their sub-paths as public", () => {
@@ -19,9 +19,17 @@ describe("isOpenPath", () => {
   it("lets /sign-out and the email-confirmation callback through regardless of session", () => {
     expect(isOpenPath("/sign-out")).toBe(true);
     expect(isOpenPath("/auth/callback")).toBe(true);
-    expect(isOpenPath("/pricing")).toBe(true);
+    expect(isOpenPath("/pricing")).toBe(false);
     expect(isOpenPath("/sign-in")).toBe(false);
     expect(isOpenPath("/")).toBe(false);
+  });
+});
+
+describe("isSessionOptionalPath", () => {
+  it("covers pages for everyone that still keep a signed-in session fresh", () => {
+    expect(isSessionOptionalPath("/pricing")).toBe(true);
+    expect(isSessionOptionalPath("/sign-in")).toBe(false);
+    expect(isSessionOptionalPath("/sign-out")).toBe(false);
   });
 });
 

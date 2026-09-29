@@ -25,7 +25,7 @@ export async function createWorkspaceAction(_prev: FormState, formData: FormData
   try {
     boardId = (await createWorkspaceWithBoard(team, parsed.data)).board.id;
   } catch (error) {
-    return conflictToFormState(error, values, team.slug);
+    return conflictToFormState(error, values, { slug: team.slug, role: membership.role });
   }
   // Redirects keep the shared [team] layout; revalidate it so the sidebar shows the new workspace.
   revalidatePath(teamPath(team.slug), "layout");

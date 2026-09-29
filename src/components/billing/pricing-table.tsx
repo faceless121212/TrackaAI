@@ -15,6 +15,7 @@ export function PricingTable({ current, actions }: { current?: Plan; actions: Re
         return (
           <Card
             key={plan}
+            role="group"
             aria-label={`${info.name} plan`}
             className={cn("flex flex-col", isCurrent && "border-primary", plan === "pro" && !current && "border-primary")}
           >

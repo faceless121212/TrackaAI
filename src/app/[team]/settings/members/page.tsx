@@ -64,7 +64,8 @@ export default async function MembersPage({ params }: PageProps<"/[team]/setting
               <InviteMembersForm teamSlug={team.slug} />
             ) : (
               <p className="text-muted-foreground text-sm">
-                {planLimitMessage(team.plan, "members")}{" "}
+                {planLimitMessage(team.plan, "members")}
+                {!can(membership.role, "billing:manage") && " Ask the team owner to upgrade."}{" "}
                 <Link href={settingsPath(team.slug, "billing")} className="text-foreground font-medium underline underline-offset-4">
                   See plans
                 </Link>

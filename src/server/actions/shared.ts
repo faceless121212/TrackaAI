@@ -1,20 +1,34 @@
 import "server-only";
 import { headers } from "next/headers";
 import { z } from "zod";
-import type { CreateWorkspaceInput, Invite, Team, UpdateTaskInput } from "@/lib/domain";
+import type { CreateWorkspaceInput, Invite, Role, Team, UpdateTaskInput } from "@/lib/domain";
 import { invalidTaskRef } from "@/lib/domain";
 import { resolveAppOrigin } from "@/lib/app-url";
 import type { ActionResult, FormState } from "@/lib/forms";
 import { invitePath, settingsPath } from "@/lib/paths";
-import { ForbiddenError } from "@/server/auth/permissions";
+import { ForbiddenError, can } from "@/server/auth/permissions";
 import { assertWithinPlan, countNewInvitees } from "@/server/billing/limits";
 import { ConflictError, NotFoundError, PlanLimitError, getRepositories } from "@/server/data";
 
 // Helpers for the "use server" modules in this folder (not an action module itself).
 
-export function conflictToFormState(error: unknown, values: Record<string, string>, teamSlug?: string): FormState {
+/**
+ * Maps a ConflictError to form errors. For a plan limit, `team` adds a link to
+ * the plans; only the owner can upgrade, so everyone else is told to ask them.
+ */
+export function conflictToFormState(
+  error: unknown,
+  values: Record<string, string>,
+  team?: { slug: string; role: Role },
+): FormState {
   if (error instanceof PlanLimitError) {
-    return { formError: error.message, upgradeHref: teamSlug ? settingsPath(teamSlug, "billing") : undefined, values };
+    if (!team) return { formError: error.message, values };
+    const owner = can(team.role, "billing:manage");
+    return {
+      formError: owner ? error.message : `${error.message} Ask the team owner to upgrade.`,
+      upgradeHref: settingsPath(team.slug, "billing"),
+      values,
+    };
   }
   if (error instanceof ConflictError) return { fieldErrors: { [error.field]: [error.message] }, values };
   throw error;

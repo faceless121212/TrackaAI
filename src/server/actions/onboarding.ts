@@ -45,7 +45,7 @@ export async function createWorkspaceAction(_prev: FormState, formData: FormData
   try {
     boardId = (await createWorkspaceWithBoard(team, parsed.data)).board.id;
   } catch (error) {
-    return conflictToFormState(error, values, team.slug);
+    return conflictToFormState(error, values, { slug: team.slug, role: membership.role });
   }
   redirect(onboardingInvitePath(team.slug, boardId));
 }
@@ -66,7 +66,7 @@ export async function sendInvitesAction(_prev: FormState, formData: FormData): P
     await assertRoomForInvites(team, parsed.data.emails);
     invites = await getRepositories().invites.create({ ...parsed.data, invitedBy: user.id });
   } catch (error) {
-    return conflictToFormState(error, values, team.slug);
+    return conflictToFormState(error, values, { slug: team.slug, role: membership.role });
   }
   await deliverInvites(invites);
   redirect(values.boardId ? boardPath(team.slug, values.boardId) : teamPath(team.slug));

@@ -23,7 +23,12 @@ export async function completeCheckoutAction(_prev: FormState, formData: FormDat
     return { formError: "Choose a plan above your current one." };
   }
 
-  await getRepositories().teams.setPlan(team.id, plan.data);
+  try {
+    await getRepositories().teams.setPlan(team.id, plan.data);
+  } catch (error) {
+    const result = toActionError(error); // rethrows anything unexpected
+    return { formError: result.ok ? undefined : result.error };
+  }
   revalidatePath(teamPath(team.slug), "layout");
   redirect(`${settingsPath(team.slug, "billing")}?upgraded=${plan.data}`);
 }

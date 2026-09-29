@@ -14,7 +14,7 @@ import { requireTeamMember } from "@/server/auth/guards";
 import { assertCan } from "@/server/auth/permissions";
 import { requireUser } from "@/server/auth/session";
 import { getRepositories } from "@/server/data";
-import { conflictToFormState, createWorkspaceWithBoard } from "./shared";
+import { conflictToFormState, createWorkspaceWithBoard, deliverInvites } from "./shared";
 
 export async function createTeamAction(_prev: FormState, formData: FormData): Promise<FormState> {
   const user = await requireUser();
@@ -62,9 +62,6 @@ export async function sendInvitesAction(_prev: FormState, formData: FormData): P
   if (!parsed.success) return { fieldErrors: z.flattenError(parsed.error).fieldErrors, values };
 
   const invites = await getRepositories().invites.create({ ...parsed.data, invitedBy: user.id });
-  for (const invite of invites) {
-    // Invite emails are sent via Resend from M5; accepting invites arrives in M3.
-    console.info(`[invite] ${invite.email} → /invite/${invite.token}`);
-  }
+  await deliverInvites(invites);
   redirect(values.boardId ? boardPath(team.slug, values.boardId) : teamPath(team.slug));
 }

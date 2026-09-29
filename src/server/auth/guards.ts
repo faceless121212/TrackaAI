@@ -45,3 +45,21 @@ export const requireTaskAccess = cache(async (taskId: string) => {
   if (!task) notFound();
   return { ...(await requireBoardAccess(task.boardId)), task };
 });
+
+export const requireLabelAccess = cache(async (labelId: string) => {
+  const label = await getRepositories().labels.get(labelId);
+  if (!label) notFound();
+  const user = await requireUser();
+  const membership = await getRepositories().memberships.get(label.teamId, user.id);
+  if (!membership) notFound();
+  return { user, membership, label };
+});
+
+export const requireInviteAccess = cache(async (inviteId: string) => {
+  const invite = await getRepositories().invites.get(inviteId);
+  if (!invite) notFound();
+  const user = await requireUser();
+  const membership = await getRepositories().memberships.get(invite.teamId, user.id);
+  if (!membership) notFound();
+  return { user, membership, invite };
+});

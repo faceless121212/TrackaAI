@@ -1,8 +1,11 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { SESSION_COOKIE, isPublicPath, signInRedirectPath } from "@/lib/auth/routes";
+import { SESSION_COOKIE, isOpenPath, isPublicPath, signInRedirectPath } from "@/lib/auth/routes";
 
 export function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
+  if (isOpenPath(pathname)) return NextResponse.next();
+
+  // Optimistic check only: pages verify the session via requireUser().
   const hasSession = request.cookies.has(SESSION_COOKIE);
 
   if (!hasSession && !isPublicPath(pathname)) {

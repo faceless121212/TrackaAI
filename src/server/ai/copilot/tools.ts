@@ -4,6 +4,7 @@ import {
   PRIORITIES,
   createTaskInputSchema,
   matchLabelIds,
+  updateTaskInputSchema,
   parseTaskKey,
   type Board,
   type Column,
@@ -80,8 +81,8 @@ export function createCopilotTools(ctx: CopilotContext) {
     };
   }
 
-  function assertCanEdit() {
-    if (!can(ctx.role, "task:update")) throw new Error("You don't have permission to change tasks.");
+  function assertCan(action: "task:create" | "task:update") {
+    if (!can(ctx.role, action)) throw new Error("You don't have permission to change tasks.");
   }
 
   function splitLabels(data: BoardData, names: string[] | undefined) {
@@ -121,15 +122,19 @@ export function createCopilotTools(ctx: CopilotContext) {
     }),
 
     summarize_board: tool({
-      description: "Counts and highlights for this board: tasks per column, unassigned, overdue and urgent/high priority.",
+      description:
+        "Counts and highlights for this board: tasks per column, and among open tasks (not in doneColumn) the unassigned, overdue and urgent/high priority ones.",
       inputSchema: z.object({}),
       execute: async () => {
         const data = await load();
         const today = new Date().toISOString().slice(0, 10);
-        const done = data.columns.at(-1)?.id;
-        const open = data.tasks.filter((t) => t.columnId !== done);
+        // The last column is treated as done (the default board's "Done").
+        const done = data.columns.at(-1);
+        const open = data.tasks.filter((t) => t.columnId !== done?.id);
         return {
           board: board.name,
+          doneColumn: done?.name ?? null,
+          today,
           total: data.tasks.length,
           columns: data.columns.map((c) => ({ name: c.name, tasks: data.tasks.filter((t) => t.columnId === c.id).length })),
           unassigned: open.filter((t) => t.assignee === null).length,
@@ -150,7 +155,7 @@ export function createCopilotTools(ctx: CopilotContext) {
         labels: z.array(z.string()).optional().describe("Label names."),
       }),
       execute: async (input) => {
-        assertCanEdit();
+        assertCan("task:create");
         const data = await load();
         const col = input.column ? column(data, input.column) : data.columns[0];
         const who = input.assignee ? member(data, input.assignee) : undefined;
@@ -182,15 +187,18 @@ export function createCopilotTools(ctx: CopilotContext) {
         labels: z.array(z.string()).optional().describe("The complete new set of label names."),
       }),
       execute: async ({ key: taskKey, labels, ...patch }) => {
-        assertCanEdit();
+        assertCan("task:update");
         const data = await load();
         const target = task(data, taskKey);
+        // Labels replace the task's set, so a typo must not silently clear it.
         const resolved = labels ? splitLabels(data, labels) : undefined;
-        const updated = await repos.tasks.update(target.id, {
-          ...patch,
-          ...(resolved ? { labelIds: resolved.ids } : {}),
-        });
-        return { ...describe(data, updated), ignoredLabels: resolved?.ignored ?? [] };
+        if (resolved?.ignored.length) {
+          throw new Error(
+            `No label named "${resolved.ignored[0]}". Labels: ${data.labels.map((l) => l.name).join(", ") || "(none)"}.`,
+          );
+        }
+        const changes = updateTaskInputSchema.parse({ ...patch, ...(resolved ? { labelIds: resolved.ids } : {}) });
+        return describe(data, await repos.tasks.update(target.id, changes));
       },
     }),
 
@@ -198,7 +206,7 @@ export function createCopilotTools(ctx: CopilotContext) {
       description: "Move a task to another column (to the end). Requires the user's approval.",
       inputSchema: z.object({ key, column: z.string() }),
       execute: async (input) => {
-        assertCanEdit();
+        assertCan("task:update");
         const data = await load();
         const target = task(data, input.key);
         const col = column(data, input.column);
@@ -214,7 +222,7 @@ export function createCopilotTools(ctx: CopilotContext) {
         assignee: z.string().nullable().describe('"me", a member\'s name or email, or null to unassign.'),
       }),
       execute: async (input) => {
-        assertCanEdit();
+        assertCan("task:update");
         const data = await load();
         const target = task(data, input.key);
         const who = input.assignee ? member(data, input.assignee) : null;

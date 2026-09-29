@@ -6,11 +6,11 @@ import {
   toUIMessageStream,
   validateUIMessages,
 } from "ai";
-import { z } from "zod";
-import { PLAN_CATALOG, idSchema } from "@/lib/domain";
+import { PLAN_CATALOG } from "@/lib/domain";
 import { settingsPath } from "@/lib/paths";
 import { toolApprovalSecret } from "@/server/ai/approval-secret";
 import { copilotInstructions } from "@/server/ai/copilot/instructions";
+import { parseCopilotRequest } from "@/server/ai/copilot/request";
 import { COPILOT_MUTATIONS, createCopilotTools } from "@/server/ai/copilot/tools";
 import { copilotModel } from "@/server/ai/model";
 import { aiError, recordTokensAfter, reserveRun, signedOut } from "@/server/ai/respond";
@@ -21,18 +21,14 @@ import { getRepositories } from "@/server/data";
 
 export const maxDuration = 60;
 
-const requestSchema = z.object({
-  boardId: idSchema,
-  // The client resends the whole chat each turn; keep it bounded.
-  messages: z.array(z.unknown()).min(1).max(60),
-});
-
 /** The board copilot: chat with tools; every change waits for the user's approval. */
 export async function POST(request: Request) {
   if (!(await getCurrentUser())) return signedOut();
-  const parsed = requestSchema.safeParse(await request.json().catch(() => null));
-  if (!parsed.success) return aiError("Invalid request", 400);
-  const { user, team, membership, board } = await requireBoardAccess(parsed.data.boardId);
+  const parsed = parseCopilotRequest(await request.text());
+  if (!parsed.ok) return aiError(parsed.error, parsed.status);
+  const secret = toolApprovalSecret();
+  if (!secret) return aiError("The copilot isn't set up on this server yet.", 503);
+  const { user, team, membership, board } = await requireBoardAccess(parsed.boardId);
 
   if (!PLAN_CATALOG[team.plan].features.copilot) {
     const message = "The board copilot is part of the Pro plan.";
@@ -45,7 +41,7 @@ export async function POST(request: Request) {
   const tools = createCopilotTools({ repos, userId: user.id, teamId: team.id, role: membership.role, board });
   let messages;
   try {
-    messages = await validateUIMessages({ messages: parsed.data.messages, tools });
+    messages = await validateUIMessages({ messages: parsed.messages, tools });
   } catch {
     return aiError("This conversation can't be continued. Start a new one.", 400);
   }
@@ -69,10 +65,16 @@ export async function POST(request: Request) {
       userName: user.name,
       today: new Date().toISOString().slice(0, 10),
     }),
-    messages: await convertToModelMessages(messages),
+    // A card left unanswered (or a stopped step) must not wedge the chat.
+    messages: await convertToModelMessages(messages, { ignoreIncompleteToolCalls: true }),
     tools,
+    // Only offer changes the caller is allowed to make.
+    activeTools: (Object.keys(tools) as (keyof typeof tools)[]).filter((name) => {
+      if (name === "create_task") return can(membership.role, "task:create");
+      return (COPILOT_MUTATIONS as readonly string[]).includes(name) ? can(membership.role, "task:update") : true;
+    }),
     toolApproval: Object.fromEntries(COPILOT_MUTATIONS.map((name) => [name, "user-approval" as const])),
-    experimental_toolApprovalSecret: toolApprovalSecret(),
+    experimental_toolApprovalSecret: secret,
     stopWhen: isStepCount(6),
     maxOutputTokens: 1500,
     onError: ({ error }) => console.error("[ai] copilot failed", error),

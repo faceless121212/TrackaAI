@@ -11,6 +11,7 @@ let repos: Repositories;
 let owner: User;
 let mate: User;
 let board: Board;
+let teamId: string;
 let otherBoard: Board;
 let tools: ReturnType<typeof createCopilotTools>;
 
@@ -48,6 +49,7 @@ beforeEach(async () => {
     ...createTaskInputSchema.parse({ boardId: otherBoard.id, columnId: (await repos.boards.listColumns(otherBoard.id))[0].id, title: "Elsewhere" }),
     createdBy: owner.id,
   });
+  teamId = team.id;
   tools = createCopilotTools({ repos, userId: owner.id, teamId: team.id, role: "owner", board });
 });
 
@@ -92,6 +94,27 @@ describe("copilot tools", () => {
     expect(task).toMatchObject({ key: "ENG-2", column: "Done", priority: "low", assignee: "Ann Lee", dueDate: null });
     await run("assign_task", { key: "ENG-2", assignee: null });
     expect((await run("search_tasks", { query: "write the docs" })).tasks[0].assignee).toBeNull();
+  });
+
+  it("finds unassigned tasks, and refuses ambiguous or outside names", async () => {
+    expect((await run("search_tasks", { assignee: "none" })).tasks.map((t) => t.key).sort()).toEqual(["ENG-2", "ENG-3"]);
+    const { user: twin } = await repos.auth.signUp({ name: "Ann Park", email: "ann.park@example.test", password: "password1" });
+    const [invite] = await repos.invites.create({ teamId, emails: [twin.email], invitedBy: owner.id });
+    await repos.invites.accept(invite.token, twin.id);
+    await expect(run("assign_task", { key: "ENG-1", assignee: "ann" })).rejects.toThrow(/Several members match "ann"/);
+    const { user: outsider } = await repos.auth.signUp({ name: "Otto Side", email: "otto@example.test", password: "password1" });
+    await expect(run("assign_task", { key: "ENG-1", assignee: outsider.email })).rejects.toThrow(/No team member matches/);
+  });
+
+  it("replaces labels on update, and refuses unknown label names instead of dropping them", async () => {
+    await run("update_task", { key: "ENG-1", labels: ["Feature", "Docs"] });
+    expect((await run("search_tasks", { query: "login" })).tasks[0].labels.sort()).toEqual(["Docs", "Feature"]);
+    await expect(run("update_task", { key: "ENG-1", labels: ["Bugg"] })).rejects.toThrow(/No label named "Bugg"/);
+    await expect(run("update_task", { key: "ENG-1", title: "   " })).rejects.toThrow();
+  });
+
+  it("says which column counts as done in the summary", async () => {
+    expect(await run("summarize_board", {})).toMatchObject({ doneColumn: "Done" });
   });
 
   it("refuses unknown names and tasks on other boards, with a message the model can act on", async () => {

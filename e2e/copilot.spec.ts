@@ -26,7 +26,12 @@ test("the copilot proposes a change and applies it only after approval", async (
   const panel = await ask(page, "move ENG-1 to Done");
   const card = panel.getByRole("group", { name: "Proposed change: Move ENG-1 to Done" });
   await expect(card.getByRole("button", { name: "Approve" })).toBeVisible();
+  await expect(card).toContainText("Write the launch post"); // the task's current title
+  await expect(panel.getByText("Approve or deny the changes above first.")).toBeVisible();
 
+  // Closing the panel keeps the conversation and the pending card.
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Copilot" }).click();
   await card.getByRole("button", { name: "Approve" }).click();
   await expect(card).toContainText("Done");
   await expect(panel.getByText("Done.", { exact: true })).toBeVisible();

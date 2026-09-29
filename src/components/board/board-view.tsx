@@ -299,7 +299,15 @@ export function BoardView(props: BoardViewProps) {
         board={board}
         workspaceName={props.workspaceName}
         canManage={canManage}
-        actions={props.copilot && <CopilotButton boardId={board.id} access={props.copilot} />}
+        actions={
+          props.copilot && (
+            <CopilotButton
+              boardId={board.id}
+              access={props.copilot}
+              taskTitles={Object.fromEntries(tasks.map((task) => [task.key, task.title]))}
+            />
+          )
+        }
       />
       <BoardToolbar
         filters={filters}

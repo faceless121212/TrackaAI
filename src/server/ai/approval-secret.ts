@@ -5,12 +5,18 @@ const globalForSecret = globalThis as typeof globalThis & { __toolApprovalSecret
 
 /**
  * Signs copilot tool approvals, so a client can't send back a forged
- * "approved" in the chat history. Set TOOL_APPROVAL_SECRET wherever more than
- * one server instance runs; without it each process makes its own (fine for
- * one dev server, but approvals won't survive a restart).
+ * "approved" in the chat history. Production needs TOOL_APPROVAL_SECRET (at
+ * least 32 characters, shared by every instance): a per-process secret would
+ * break approvals across instances and restarts. Elsewhere each process makes
+ * its own. Returns null when production isn't configured.
  */
-export function toolApprovalSecret(): string {
-  if (process.env.TOOL_APPROVAL_SECRET) return process.env.TOOL_APPROVAL_SECRET;
+export function toolApprovalSecret(): string | null {
+  const configured = process.env.TOOL_APPROVAL_SECRET;
+  if (configured && configured.length >= 32) return configured;
+  if (process.env.NODE_ENV === "production") {
+    console.error("[ai] TOOL_APPROVAL_SECRET is missing or shorter than 32 characters; the copilot is off.");
+    return null;
+  }
   globalForSecret.__toolApprovalSecret ??= randomBytes(32).toString("base64url");
   return globalForSecret.__toolApprovalSecret;
 }

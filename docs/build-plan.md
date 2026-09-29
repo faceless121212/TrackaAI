@@ -16,7 +16,7 @@ This file holds the detailed, task-level plan for the **current** milestone. Eac
 | M5 — Emails (Resend) | ⏭️ Skipped (decision) |
 | M6 — Plans & billing (simulated) | ✅ Done |
 | M7 — AI I: task writer & breakdown | ✅ Done |
-| M8 — AI II: board copilot | 🚧 In progress |
+| M8 — AI II: board copilot | ✅ Done |
 | M9 — AI III: AI teammate | — |
 | M10 — Hardening & launch | — |
 
@@ -15436,6 +15436,17 @@ Gotchas:
 4. Mock copilot model for e2e (a tool call on "move …", text otherwise).
 5. UI: "Copilot" button in the board header → side sheet with messages, confirm cards (Approve / Deny) and result lines; the board refreshes after a change.
 6. E2E (mock), one live run, docs, pre-PR review → PR → auto-merge.
+
+### Build record
+
+Shipped as planned. Verified live with `claude-sonnet-5`: an accurate board summary, and a two-part request that became two confirm cards; denying both changed nothing, and the model acknowledged it. Each request was logged in `ai_usage` (feature `copilot`).
+
+Gotchas:
+1. AI SDK v7 moved approval to `toolApproval` on `streamText` (`needsApproval` is deprecated); the client continues after a decision with `sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithApprovalResponses`.
+2. The chat history comes from the client, so approvals could be forged → `experimental_toolApprovalSecret` signs each approval request; the history is also checked with `validateUIMessages` against the tools and capped at 60 messages.
+3. Tools return errors as thrown messages written for the model ("No column named X. Columns: …"), so it can correct names and retry once.
+4. A modal sheet hides the board from the accessibility tree, so e2e checks the board after closing the panel.
+5. `@ai-sdk/provider` is a direct dev dependency (the mock copilot model uses its stream-part types).
 
 ## Next up: M9
 

@@ -10,7 +10,7 @@ import { endSession, startSession } from "@/server/auth/session";
 import { ConflictError, getRepositories } from "@/server/data";
 
 export async function signUpAction(_prev: FormState, formData: FormData): Promise<FormState> {
-  const values = formValues(formData, ["name", "email", "password"]);
+  const values = formValues(formData, ["name", "email", "password", "next"]);
   const echo = { name: values.name, email: values.email };
   const parsed = signUpInputSchema.safeParse(values);
   if (!parsed.success) return { fieldErrors: z.flattenError(parsed.error).fieldErrors, values: echo };
@@ -23,7 +23,9 @@ export async function signUpAction(_prev: FormState, formData: FormData): Promis
     throw error;
   }
   await startSession(userId);
-  redirect(ONBOARDING_PATH);
+  // Invitees arrive with ?next=/invite/<token>; everyone else starts onboarding.
+  const next = safeNextPath(values.next);
+  redirect(next === "/" ? ONBOARDING_PATH : next);
 }
 
 export async function signInAction(_prev: FormState, formData: FormData): Promise<FormState> {

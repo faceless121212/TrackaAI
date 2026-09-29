@@ -15,6 +15,7 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { boardPath } from "@/lib/paths";
+import { setThemePreferenceAction } from "@/server/actions/profile";
 import { navItems } from "./nav-items";
 
 export function CommandMenu({
@@ -42,6 +43,11 @@ export function CommandMenu({
   function run(action: () => void) {
     setOpen(false);
     action();
+  }
+
+  function applyTheme(theme: "dark" | "light") {
+    setTheme(theme);
+    void setThemePreferenceAction(theme);
   }
 
   return (
@@ -83,11 +89,11 @@ export function CommandMenu({
               </CommandGroup>
             )}
             <CommandGroup heading="Theme">
-              <CommandItem onSelect={() => run(() => setTheme("dark"))}>
+              <CommandItem onSelect={() => run(() => applyTheme("dark"))}>
                 <Moon />
                 Dark theme
               </CommandItem>
-              <CommandItem onSelect={() => run(() => setTheme("light"))}>
+              <CommandItem onSelect={() => run(() => applyTheme("light"))}>
                 <Sun />
                 Light theme
               </CommandItem>

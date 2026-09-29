@@ -11,8 +11,8 @@ This file holds the detailed, task-level plan for the **current** milestone. Eac
 | M0 — Foundation | ✅ Done |
 | M1 — Mock data layer + onboarding | ✅ Done |
 | M2 — Workspaces, boards & Kanban | ✅ Done |
-| M3 — Team & user management | Planned when M2 is merged |
-| M4 — Supabase (local, Docker) | — |
+| M3 — Team & user management | ✅ Done |
+| M4 — Supabase (local, Docker) | Planned when M3 is merged |
 | M5 — Emails (Resend) | — |
 | M6 — Billing (Stripe) | — |
 | M7 — AI I: task writer & breakdown | — |
@@ -10459,6 +10459,4853 @@ Then confirm CI is green on the PR.
 - My tasks lists the caller's assignments across the team.
 - 154 unit tests (TDD for positions, filters, refs, reducers, repositories, permissions) + 20 e2e tests green locally and in CI.
 
-## Next up: M3
+---
 
-Planned here once M2 is merged: members page with roles (change role, remove, leave team), invite list with resend/revoke and the accept-invite flow (`/invite/[token]`), profile & preferences (name, avatar, theme), team settings with label management, and permission tests for every role.
+# M3 — Team & user management Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** A second person can be invited, join and collaborate. Team settings at `/[team]/settings` (General · Members · Labels · Profile): rename/delete the team, change roles, remove members, transfer ownership, leave; invite by email with a role, see pending invites (copy link, resend, revoke); manage labels; edit your profile (name, avatar URL, theme). Invite links (`/invite/[token]`) survive sign-in/sign-up, and the theme preference is stored per user.
+
+**Architecture:** Same layering as M2: Zod input schemas (`@/lib/domain`) → Server Actions (`src/server/actions/{members,invites,team,labels,profile}.ts`) → guards (`requireTeamMember`, new `requireLabelAccess` / `requireInviteAccess`) → `permissions.ts` → repositories. Member management rules are pure functions in `permissions.ts` (`canManageMember`, `assignableRoles`, `canLeaveTeam`) and are unit-tested. Invite acceptance is one atomic repository write that checks token, expiry and the invited email. Invite emails are still only logged (`deliverInvites`, M5 swaps in Resend); managers can copy the link from the members page meanwhile.
+
+**Product decisions to confirm in review:**
+- Accepting an invite requires being signed in with the **invited email**; a different account sees "Wrong account" with a sign-out-and-switch link that keeps the invite.
+- The owner manages admins and members; admins manage members only; nobody changes or removes the owner. Ownership moves only by an explicit transfer, which makes the old owner an admin. The owner must transfer before leaving; only the owner can delete the team.
+- Owners and admins can invite as member or admin. Removed members' tasks and comments stay (their name shows as "Former member").
+- Avatars are image URLs for now (uploads arrive with Supabase Storage). Theme is saved per user from the profile, the header toggle and ⌘K, and applied when you sign in on another device.
+- The team URL (slug) can't be changed.
+
+**New dependencies:** none.
+
+## Global Constraints
+
+- Everything in M0–M2's Global Constraints still applies. Branch: `git switch -c m3-team-management` from an up-to-date `main`.
+- Before opening the PR, run the `pre-pr-reviewer` subagent (`.claude/agents/pre-pr-reviewer.md`) on the branch and fix its findings; then open the PR and queue auto-merge (merge commit) so it lands when CI passes.
+
+## Verified gotchas (found while dry-running this plan)
+
+1. Making `role` part of `createInvitesInputSchema` (with a default) makes it **required** in the inferred type, which broke existing `invites.create` calls → the repository accepts `Omit<CreateInvitesInput, "role"> & { role?: InviteRole }`.
+2. While a confirmation dialog is open, Radix hides the rest of the page from the accessibility tree, so an e2e assertion like "the member row is gone" passed *before* the server removed them → wait for the success toast, which only appears after the action resolves.
+3. **Bug in M2, fixed here:** the board toolbar's debounced search (and quick successive filter clicks) started from filters of the last render, so "Clear filters" followed by typing within 250 ms re-applied the old filters → every change now derives from, and updates, a `latest` ref synchronously.
+4. `type="url"` makes the browser block the submit, so the server's avatar-URL message never renders in e2e → the test checks `checkValidity()` instead.
+5. The theme toggle now saves a per-user preference. The M1 e2e test toggled the shared **demo** user, which would leak into retries → the theme test uses a fresh user, waits for the save request, and checks a second browser context (a "new device").
+6. `ThemePreferenceSync` applies the saved theme once per value (ref), otherwise it would undo toggles made before the page's data refreshed.
+7. Optimistic label edits race page reloads just like the board (M2 gotcha 2) → the label list is `aria-busy` while saving and the test waits for it.
+8. Found while building (not in the dry run): with the machine under load (load average ≈ 12) a server action took longer than Playwright's default 5 s `expect` timeout → `playwright.config.ts` sets `expect: { timeout: 10_000 }`.
+
+Preventive: invite links are built from `x-forwarded-host`/`host` so they're correct behind a proxy; `/sign-out?next=` goes through `safeNextPath` so it can't become an open redirect.
+
+## File map (end of M3)
+
+```
+src/
+  app/[team]/settings/layout.tsx, page.tsx            General (Task 5)
+  app/[team]/settings/{members,labels,profile}/page.tsx  (Task 5)
+  app/invite/[token]/page.tsx                         accept flow (Task 6)
+  app/(auth)/sign-up/page.tsx, app/sign-out/route.ts  keep ?next= (Task 6)
+  app/[team]/layout.tsx                               ThemePreferenceSync (Task 7)
+  components/
+    settings/{settings-nav,settings-section,team-forms,members,labels,profile-form}.tsx  (Task 5)
+    invites/accept-invite-button.tsx                  (Task 6)
+    theme/theme-preference-sync.tsx, theme-toggle.tsx (+test)                            (Task 7)
+    shell/{nav-items,command-menu(+test),app-sidebar}.tsx  Settings nav, profile link   (Tasks 5, 7)
+    tasks/member-avatar.tsx                           shadcn Avatar with image (Task 5)
+    board/board-toolbar.tsx                           stale-filter fix (Task 5)
+  lib/
+    domain/schemas.ts, constants.ts (+test)           theme, profile, team, label, invite role (Task 1)
+    auth/routes.ts (+test)                            withNext (Task 6)
+    paths.ts                                          settingsPath, invitePath (Task 4)
+  server/
+    actions/{members,invites,team,labels,profile}.ts  (Task 4)
+    actions/{shared,onboarding,auth}.ts               deliverInvites, absoluteUrl, sign-up next (Task 4)
+    auth/guards.ts, permissions.ts (+test)            (Tasks 3, 4)
+    data/types.ts, mock/repositories.ts (+test)       (Tasks 1–2)
+e2e/helpers.ts, team.spec.ts, shell.spec.ts            (Tasks 7–8)
+```
+
+---
+
+### Task 1: Domain — theme, profile, team, label and invite-role schemas
+
+**Files:**
+- Modify: `src/lib/domain/constants.ts`, `src/lib/domain/schemas.ts`, `src/lib/domain/schemas.test.ts`, `src/server/data/types.ts` (one signature)
+
+**Interfaces:**
+- Produces: `THEMES`; `themeSchema`/`Theme`, `inviteRoleSchema`/`InviteRole`; `userSchema.theme` (optional — users from before M3 have none); `updateTeamInputSchema`, `updateProfileInputSchema`, `labelInputSchema`, `updateLabelInputSchema` and their types; `createInvitesInputSchema.role` (default `"member"`).
+
+- [ ] **Step 1: Write the failing tests**
+
+Replace `src/lib/domain/schemas.test.ts` (M2 tests plus profile, team, label and invite-role inputs):
+
+```ts
+import { describe, expect, it } from "vitest";
+import {
+  assigneeSchema,
+  createCommentInputSchema,
+  createInvitesInputSchema,
+  createTaskInputSchema,
+  keyPrefixSchema,
+  labelInputSchema,
+  labelSchema,
+  signUpInputSchema,
+  slugSchema,
+  updateLabelInputSchema,
+  updateProfileInputSchema,
+  updateTaskInputSchema,
+  updateTeamInputSchema,
+} from "./schemas";
+
+describe("keyPrefixSchema", () => {
+  it.each(["ENG", "A1", "WEB22"])("accepts %s", (value) => {
+    expect(keyPrefixSchema.safeParse(value).success).toBe(true);
+  });
+
+  it.each(["eng", "E", "TOOLONG", "1AB"])("rejects %s", (value) => {
+    expect(keyPrefixSchema.safeParse(value).success).toBe(false);
+  });
+});
+
+describe("slugSchema", () => {
+  it.each(["acme", "acme-inc", "team42"])("accepts %s", (value) => {
+    expect(slugSchema.safeParse(value).success).toBe(true);
+  });
+
+  it.each(["Acme", "-acme", "a", "acme--inc", "acme_inc"])("rejects %s", (value) => {
+    expect(slugSchema.safeParse(value).success).toBe(false);
+  });
+});
+
+describe("createTaskInputSchema", () => {
+  it("trims the title and fills defaults", () => {
+    expect(
+      createTaskInputSchema.parse({ boardId: "b1", columnId: "c1", title: "  Fix login  " }),
+    ).toEqual({
+      boardId: "b1",
+      columnId: "c1",
+      title: "Fix login",
+      description: "",
+      priority: "none",
+      assignee: null,
+      labelIds: [],
+      dueDate: null,
+      parentId: null,
+    });
+  });
+
+  it("rejects a blank title", () => {
+    expect(
+      createTaskInputSchema.safeParse({ boardId: "b1", columnId: "c1", title: "   " }).success,
+    ).toBe(false);
+  });
+
+  it("rejects an unknown priority", () => {
+    expect(
+      createTaskInputSchema.safeParse({ boardId: "b1", columnId: "c1", title: "x", priority: "p0" })
+        .success,
+    ).toBe(false);
+  });
+});
+
+describe("updateTaskInputSchema", () => {
+  it("leaves unspecified fields out instead of defaulting them", () => {
+    expect(updateTaskInputSchema.parse({})).toEqual({});
+    expect(updateTaskInputSchema.parse({ priority: "high" })).toEqual({ priority: "high" });
+  });
+});
+
+describe("assigneeSchema", () => {
+  it("accepts users, agents and null", () => {
+    expect(assigneeSchema.parse({ kind: "user", userId: "u1" })).toEqual({ kind: "user", userId: "u1" });
+    expect(assigneeSchema.parse({ kind: "agent", agentId: "a1" })).toEqual({ kind: "agent", agentId: "a1" });
+    expect(assigneeSchema.parse(null)).toBeNull();
+  });
+});
+
+describe("reserved slugs", () => {
+  it.each(["onboarding", "sign-in", "api"])("rejects %s", (value) => {
+    expect(slugSchema.safeParse(value).success).toBe(false);
+  });
+});
+
+describe("signUpInputSchema", () => {
+  it("normalises the email", () => {
+    expect(
+      signUpInputSchema.parse({ name: "Ada", email: "  Ada@Example.TEST ", password: "longenough" }),
+    ).toEqual({ name: "Ada", email: "ada@example.test", password: "longenough" });
+  });
+
+  it("requires at least 8 password characters", () => {
+    const result = signUpInputSchema.safeParse({ name: "Ada", email: "a@b.test", password: "short" });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("createInvitesInputSchema", () => {
+  it("rejects an empty list and invalid emails", () => {
+    expect(createInvitesInputSchema.safeParse({ teamId: "t1", emails: [] }).success).toBe(false);
+    expect(createInvitesInputSchema.safeParse({ teamId: "t1", emails: ["nope"] }).success).toBe(false);
+  });
+
+  it("caps a batch at 10", () => {
+    const emails = Array.from({ length: 11 }, (_, i) => `u${i}@example.test`);
+    expect(createInvitesInputSchema.safeParse({ teamId: "t1", emails }).success).toBe(false);
+  });
+});
+
+describe("labels and comments", () => {
+  it("accepts palette colours only", () => {
+    expect(labelSchema.safeParse({ id: "l", teamId: "t", name: "Bug", color: "red" }).success).toBe(true);
+    expect(labelSchema.safeParse({ id: "l", teamId: "t", name: "Bug", color: "#ff0000" }).success).toBe(false);
+  });
+
+  it("trims comment bodies and rejects blank ones", () => {
+    expect(createCommentInputSchema.parse({ taskId: "t", body: "  hi  " })).toEqual({ taskId: "t", body: "hi" });
+    expect(createCommentInputSchema.safeParse({ taskId: "t", body: "   " }).success).toBe(false);
+  });
+});
+
+describe("profile, team and label inputs", () => {
+  it("accepts a profile with an optional avatar URL and a theme", () => {
+    expect(updateProfileInputSchema.parse({ name: " Ada ", avatarUrl: null, theme: "light" })).toEqual({
+      name: "Ada",
+      avatarUrl: null,
+      theme: "light",
+    });
+    expect(updateProfileInputSchema.safeParse({ name: "Ada", avatarUrl: "not a url", theme: "dark" }).success).toBe(false);
+    expect(updateProfileInputSchema.safeParse({ name: "Ada", avatarUrl: null, theme: "sepia" }).success).toBe(false);
+  });
+
+  it("validates label names and colours", () => {
+    expect(labelInputSchema.parse({ name: " Ops ", color: "green" })).toEqual({ name: "Ops", color: "green" });
+    expect(labelInputSchema.safeParse({ name: "", color: "green" }).success).toBe(false);
+    expect(updateLabelInputSchema.parse({ color: "pink" })).toEqual({ color: "pink" });
+  });
+
+  it("renames teams", () => {
+    expect(updateTeamInputSchema.parse({ name: " Acme 2 " })).toEqual({ name: "Acme 2" });
+  });
+
+  it("defaults invites to the member role and never invites owners", () => {
+    expect(createInvitesInputSchema.parse({ teamId: "t", emails: ["a@b.test"] }).role).toBe("member");
+    expect(createInvitesInputSchema.parse({ teamId: "t", emails: ["a@b.test"], role: "admin" }).role).toBe("admin");
+    expect(createInvitesInputSchema.safeParse({ teamId: "t", emails: ["a@b.test"], role: "owner" }).success).toBe(false);
+  });
+});
+```
+
+- [ ] **Step 2: Run them to verify they fail**
+
+Run: `pnpm test src/lib/domain`
+Expected: FAIL — 4 tests (`updateProfileInputSchema` etc. are undefined).
+
+- [ ] **Step 3: Implement**
+
+Replace `src/lib/domain/constants.ts`:
+
+```ts
+// Columns seeded on every new board (PRD §5.1).
+export const DEFAULT_COLUMNS = ["Backlog", "Todo", "In Progress", "In Review", "Done"] as const;
+
+// Top-level routes that a team slug (/[team]) must never shadow.
+export const RESERVED_SLUGS: readonly string[] = [
+  "api",
+  "invite",
+  "onboarding",
+  "settings",
+  "sign-in",
+  "sign-out",
+  "sign-up",
+];
+
+export const MAX_INVITES_PER_BATCH = 10;
+export const INVITE_TTL_DAYS = 7;
+
+// Label colours map to --label-<name> CSS variables in globals.css.
+export const LABEL_COLORS = ["gray", "red", "orange", "yellow", "green", "blue", "purple", "pink"] as const;
+
+// Seeded on every new team; editable from team settings in M3.
+export const DEFAULT_LABELS = [
+  { name: "Bug", color: "red" },
+  { name: "Feature", color: "purple" },
+  { name: "Improvement", color: "blue" },
+  { name: "Docs", color: "gray" },
+] as const;
+
+// "system" follows the OS; dark is the app default (PRD §6).
+export const THEMES = ["system", "light", "dark"] as const;
+```
+
+Replace `src/lib/domain/schemas.ts`:
+
+```ts
+import { z } from "zod";
+import { LABEL_COLORS, MAX_INVITES_PER_BATCH, RESERVED_SLUGS, THEMES } from "./constants";
+
+export const ROLES = ["owner", "admin", "member"] as const;
+export const PRIORITIES = ["none", "low", "medium", "high", "urgent"] as const;
+export const PLANS = ["lite", "pro"] as const;
+
+export const idSchema = z.string().min(1);
+export const roleSchema = z.enum(ROLES);
+export const inviteRoleSchema = roleSchema.exclude(["owner"]);
+export const themeSchema = z.enum(THEMES);
+export const prioritySchema = z.enum(PRIORITIES);
+export const planSchema = z.enum(PLANS);
+
+export const slugSchema = z
+  .string()
+  .min(2)
+  .max(40)
+  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Use lowercase letters, numbers and single dashes")
+  .refine((slug) => !RESERVED_SLUGS.includes(slug), "This name is reserved");
+
+export const keyPrefixSchema = z
+  .string()
+  .regex(/^[A-Z][A-Z0-9]{1,4}$/, "Use 2–5 uppercase letters or digits, starting with a letter");
+
+const timestampSchema = z.iso.datetime();
+
+// Trim and lowercase before checking the format, so " Ann@X.test " is valid.
+export const emailSchema = z.string().trim().toLowerCase().pipe(z.email("Enter a valid email"));
+export const passwordSchema = z.string().min(8, "Use at least 8 characters").max(72);
+
+export const userSchema = z.object({
+  id: idSchema,
+  email: z.email(),
+  name: z.string().trim().min(1).max(80),
+  avatarUrl: z.url("Enter a full URL, like https://…").nullable(),
+  /** Absent for users created before M3; the app then uses the dark default. */
+  theme: themeSchema.optional(),
+  createdAt: timestampSchema,
+});
+
+export const teamSchema = z.object({
+  id: idSchema,
+  name: z.string().trim().min(1).max(60),
+  slug: slugSchema,
+  plan: planSchema,
+  createdAt: timestampSchema,
+});
+
+export const membershipSchema = z.object({
+  teamId: idSchema,
+  userId: idSchema,
+  role: roleSchema,
+  joinedAt: timestampSchema,
+});
+
+export const workspaceSchema = z.object({
+  id: idSchema,
+  teamId: idSchema,
+  name: z.string().trim().min(1).max(60),
+  keyPrefix: keyPrefixSchema,
+  nextTaskNumber: z.number().int().positive(),
+  createdAt: timestampSchema,
+});
+
+export const boardSchema = z.object({
+  id: idSchema,
+  workspaceId: idSchema,
+  name: z.string().trim().min(1).max(60),
+  description: z.string().max(500).nullable(),
+  createdAt: timestampSchema,
+});
+
+export const columnSchema = z.object({
+  id: idSchema,
+  boardId: idSchema,
+  name: z.string().trim().min(1).max(40),
+  position: z.string().min(1),
+});
+
+export const assigneeSchema = z
+  .discriminatedUnion("kind", [
+    z.object({ kind: z.literal("user"), userId: idSchema }),
+    z.object({ kind: z.literal("agent"), agentId: idSchema }),
+  ])
+  .nullable();
+
+export const taskSchema = z.object({
+  id: idSchema,
+  boardId: idSchema,
+  columnId: idSchema,
+  number: z.number().int().positive(),
+  key: z.string().min(1),
+  title: z.string().trim().min(1).max(200),
+  description: z.string().max(20_000),
+  priority: prioritySchema,
+  assignee: assigneeSchema,
+  labelIds: z.array(idSchema),
+  dueDate: z.iso.date().nullable(),
+  position: z.string().min(1),
+  parentId: idSchema.nullable(),
+  createdBy: idSchema,
+  createdAt: timestampSchema,
+  updatedAt: timestampSchema,
+});
+
+export const labelColorSchema = z.enum(LABEL_COLORS);
+
+export const labelSchema = z.object({
+  id: idSchema,
+  teamId: idSchema,
+  name: z.string().trim().min(1).max(30),
+  color: labelColorSchema,
+});
+
+export const commentAuthorSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("user"), userId: idSchema }),
+  z.object({ kind: z.literal("agent"), agentId: idSchema }),
+]);
+
+export const commentSchema = z.object({
+  id: idSchema,
+  taskId: idSchema,
+  author: commentAuthorSchema,
+  body: z.string().trim().min(1, "Write something first").max(10_000),
+  createdAt: timestampSchema,
+});
+
+export const inviteSchema = z.object({
+  id: idSchema,
+  teamId: idSchema,
+  email: z.email(),
+  role: inviteRoleSchema,
+  token: z.string().min(16),
+  invitedBy: idSchema,
+  expiresAt: timestampSchema,
+  acceptedAt: timestampSchema.nullable(),
+  createdAt: timestampSchema,
+});
+
+export const signUpInputSchema = z.object({
+  name: userSchema.shape.name,
+  email: emailSchema,
+  password: passwordSchema,
+});
+
+export const signInInputSchema = z.object({
+  email: emailSchema,
+  password: z.string().min(1, "Enter your password"),
+});
+
+export const createInvitesInputSchema = z.object({
+  teamId: idSchema,
+  emails: z
+    .array(emailSchema)
+    .min(1, "Add at least one email")
+    .max(MAX_INVITES_PER_BATCH, `Invite at most ${MAX_INVITES_PER_BATCH} people at a time`),
+  role: inviteRoleSchema.default("member"),
+});
+
+export const createTeamInputSchema = teamSchema.pick({ name: true, slug: true });
+
+export const createWorkspaceInputSchema = workspaceSchema.pick({
+  teamId: true,
+  name: true,
+  keyPrefix: true,
+});
+
+export const createBoardInputSchema = boardSchema
+  .pick({ workspaceId: true, name: true })
+  .extend({ description: z.string().max(500).nullable().default(null) });
+
+export const createTaskInputSchema = z.object({
+  boardId: idSchema,
+  columnId: idSchema,
+  title: taskSchema.shape.title,
+  description: taskSchema.shape.description.default(""),
+  priority: prioritySchema.default("none"),
+  assignee: assigneeSchema.default(null),
+  labelIds: z.array(idSchema).default([]),
+  dueDate: taskSchema.shape.dueDate.default(null),
+  parentId: taskSchema.shape.parentId.default(null),
+});
+
+export const updateTeamInputSchema = teamSchema.pick({ name: true });
+
+export const updateProfileInputSchema = z.object({
+  name: userSchema.shape.name,
+  avatarUrl: userSchema.shape.avatarUrl,
+  theme: themeSchema,
+});
+
+export const labelInputSchema = labelSchema.pick({ name: true, color: true });
+export const updateLabelInputSchema = labelInputSchema.partial();
+
+export const updateWorkspaceInputSchema = workspaceSchema.pick({ name: true });
+
+export const updateBoardInputSchema = boardSchema.pick({ name: true, description: true }).partial();
+
+export const columnNameSchema = columnSchema.shape.name;
+
+export const createCommentInputSchema = commentSchema.pick({ taskId: true, body: true });
+
+// No defaults here: an update only touches the fields it names.
+export const updateTaskInputSchema = taskSchema
+  .pick({
+    title: true,
+    description: true,
+    priority: true,
+    assignee: true,
+    labelIds: true,
+    dueDate: true,
+    parentId: true,
+  })
+  .partial();
+
+export type Role = z.infer<typeof roleSchema>;
+export type Priority = z.infer<typeof prioritySchema>;
+export type Plan = z.infer<typeof planSchema>;
+export type User = z.infer<typeof userSchema>;
+export type Team = z.infer<typeof teamSchema>;
+export type Membership = z.infer<typeof membershipSchema>;
+export type Workspace = z.infer<typeof workspaceSchema>;
+export type Board = z.infer<typeof boardSchema>;
+export type Column = z.infer<typeof columnSchema>;
+export type Assignee = z.infer<typeof assigneeSchema>;
+export type Task = z.infer<typeof taskSchema>;
+export type Theme = z.infer<typeof themeSchema>;
+export type InviteRole = z.infer<typeof inviteRoleSchema>;
+export type UpdateTeamInput = z.infer<typeof updateTeamInputSchema>;
+export type UpdateProfileInput = z.infer<typeof updateProfileInputSchema>;
+export type LabelInput = z.infer<typeof labelInputSchema>;
+export type UpdateLabelInput = z.infer<typeof updateLabelInputSchema>;
+export type LabelColor = z.infer<typeof labelColorSchema>;
+export type Label = z.infer<typeof labelSchema>;
+export type CommentAuthor = z.infer<typeof commentAuthorSchema>;
+export type Comment = z.infer<typeof commentSchema>;
+export type UpdateWorkspaceInput = z.infer<typeof updateWorkspaceInputSchema>;
+export type UpdateBoardInput = z.infer<typeof updateBoardInputSchema>;
+export type CreateCommentInput = z.infer<typeof createCommentInputSchema>;
+export type Invite = z.infer<typeof inviteSchema>;
+export type SignUpInput = z.infer<typeof signUpInputSchema>;
+export type SignInInput = z.infer<typeof signInInputSchema>;
+export type CreateInvitesInput = z.infer<typeof createInvitesInputSchema>;
+export type CreateTeamInput = z.infer<typeof createTeamInputSchema>;
+export type CreateWorkspaceInput = z.infer<typeof createWorkspaceInputSchema>;
+export type CreateBoardInput = z.infer<typeof createBoardInputSchema>;
+export type CreateTaskInput = z.infer<typeof createTaskInputSchema>;
+export type UpdateTaskInput = z.infer<typeof updateTaskInputSchema>;
+```
+
+In `src/server/data/types.ts` (gotcha 1), import `InviteRole` from `@/lib/domain` and change `InvitesRepo.create` to:
+
+```ts
+  create(input: Omit<CreateInvitesInput, "role"> & { role?: InviteRole; invitedBy: string }): Promise<Invite[]>;
+```
+
+- [ ] **Step 4: Verify**
+
+Run: `pnpm test && pnpm lint && pnpm typecheck`
+Expected: 158 tests pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add -A
+git commit -m "feat(domain): add profile, team, label and invite-role schemas"
+```
+
+---
+
+### Task 2: Data layer — profiles, team admin, invite lifecycle, labels
+
+**Files:**
+- Modify: `src/server/data/types.ts`, `src/server/data/mock/repositories.ts`, `src/server/data/mock/repositories.test.ts`
+
+**Interfaces:**
+- Produces: `users.update(id, patch)`; `teams.update`, `teams.delete` (cascades workspaces → boards → tasks/comments, labels, invites, memberships); `memberships.transferOwnership(teamId, from, to)`; `invites.create({ role? })`, `invites.get`, `getByToken`, `resend` (new token + expiry), `revoke`, `accept(token, userId)` (ConflictError `token` when used/expired, `email` when sent to someone else; returns the membership); `labels.get`, `create(teamId, input)` / `update` (unique names per team, case-insensitive → ConflictError `name`), `delete` (strips it from tasks).
+
+- [ ] **Step 1: Write the failing tests**
+
+Replace `src/server/data/mock/repositories.test.ts` (adds a `joinTeam` helper and profile, team-admin, invite-lifecycle and label tests):
+
+```ts
+import { beforeEach, describe, expect, it } from "vitest";
+import { DEFAULT_COLUMNS, DEFAULT_LABELS, createTaskInputSchema, type User } from "@/lib/domain";
+import { ConflictError, NotFoundError } from "../errors";
+import type { Repositories } from "../types";
+import { emptyDb } from "./db";
+import { createMockRepositories } from "./repositories";
+import { createMemoryStore } from "./store";
+
+let repos: Repositories;
+let owner: User;
+
+beforeEach(async () => {
+  repos = createMockRepositories(createMemoryStore(emptyDb()));
+  owner = await repos.auth.signUp({ name: "Owner", email: "owner@example.test", password: "password1" });
+});
+
+async function setupBoard() {
+  const team = await repos.teams.create({ name: "Acme", slug: "acme", ownerId: owner.id });
+  const workspace = await repos.workspaces.create({ teamId: team.id, name: "Eng", keyPrefix: "ENG" });
+  const board = await repos.boards.create({ workspaceId: workspace.id, name: "Eng", description: null });
+  const columns = await repos.boards.listColumns(board.id);
+  return { team, workspace, board, columns };
+}
+
+/** Signs a user up and adds them to the team through an accepted invite. */
+async function joinTeam(teamId: string, email: string) {
+  const [invite] = await repos.invites.create({ teamId, emails: [email], invitedBy: owner.id });
+  const user = await repos.auth.signUp({ name: email, email, password: "password1" });
+  await repos.invites.accept(invite.token, user.id);
+  return user;
+}
+
+function taskInput(boardId: string, columnId: string, title: string) {
+  return { ...createTaskInputSchema.parse({ boardId, columnId, title }), createdBy: owner.id };
+}
+
+describe("auth", () => {
+  it("signs in with the right password only", async () => {
+    expect(await repos.auth.signIn({ email: "owner@example.test", password: "password1" })).toEqual(owner);
+    expect(await repos.auth.signIn({ email: "owner@example.test", password: "nope" })).toBeNull();
+    expect(await repos.auth.signIn({ email: "ghost@example.test", password: "password1" })).toBeNull();
+  });
+
+  it("rejects a duplicate email, case-insensitively", async () => {
+    await expect(
+      repos.auth.signUp({ name: "Dup", email: "OWNER@example.test", password: "password1" }),
+    ).rejects.toBeInstanceOf(ConflictError);
+  });
+
+  it("exposes users by id and email", async () => {
+    expect(await repos.users.getById(owner.id)).toEqual(owner);
+    expect(await repos.users.getByEmail("Owner@Example.test")).toEqual(owner);
+  });
+});
+
+describe("teams", () => {
+  it("makes the creator the owner", async () => {
+    const team = await repos.teams.create({ name: "Acme", slug: "acme", ownerId: owner.id });
+    expect(team.plan).toBe("lite");
+    expect(await repos.memberships.get(team.id, owner.id)).toMatchObject({ role: "owner" });
+    expect(await repos.teams.listForUser(owner.id)).toEqual([team]);
+    expect(await repos.teams.getBySlug("acme")).toEqual(team);
+  });
+
+  it("rejects a taken slug", async () => {
+    await repos.teams.create({ name: "Acme", slug: "acme", ownerId: owner.id });
+    const error = await repos.teams
+      .create({ name: "Other", slug: "acme", ownerId: owner.id })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ConflictError);
+    expect((error as ConflictError).field).toBe("slug");
+  });
+});
+
+describe("memberships", () => {
+  it("changes roles and removes members", async () => {
+    const { team } = await setupBoard();
+    expect(await repos.memberships.setRole(team.id, owner.id, "admin")).toMatchObject({ role: "admin" });
+    const stranger = await repos.auth.signUp({ name: "S", email: "s@example.test", password: "password1" });
+    await expect(repos.memberships.setRole(team.id, stranger.id, "admin")).rejects.toBeInstanceOf(
+      NotFoundError,
+    );
+    await repos.memberships.remove(team.id, owner.id);
+    expect(await repos.memberships.list(team.id)).toEqual([]);
+  });
+});
+
+describe("workspaces", () => {
+  it("starts task numbering at 1 and rejects a duplicate prefix in the team", async () => {
+    const { team, workspace } = await setupBoard();
+    expect(workspace.nextTaskNumber).toBe(1);
+    expect(await repos.workspaces.listForTeam(team.id)).toEqual([workspace]);
+    await expect(
+      repos.workspaces.create({ teamId: team.id, name: "Again", keyPrefix: "ENG" }),
+    ).rejects.toBeInstanceOf(ConflictError);
+  });
+});
+
+describe("boards", () => {
+  it("seeds the default columns in order", async () => {
+    const { board, columns } = await setupBoard();
+    expect(columns.map((c) => c.name)).toEqual([...DEFAULT_COLUMNS]);
+    expect(columns.every((c) => c.boardId === board.id)).toBe(true);
+    const positions = columns.map((c) => c.position);
+    expect([...positions].sort()).toEqual(positions);
+  });
+
+  it("fails for an unknown workspace", async () => {
+    await expect(
+      repos.boards.create({ workspaceId: "nope", name: "X", description: null }),
+    ).rejects.toBeInstanceOf(NotFoundError);
+  });
+});
+
+describe("tasks", () => {
+  it("allocates sequential keys per workspace and appends to the column", async () => {
+    const { workspace, board, columns } = await setupBoard();
+    const first = await repos.tasks.create(taskInput(board.id, columns[0].id, "One"));
+    const second = await repos.tasks.create(taskInput(board.id, columns[0].id, "Two"));
+    expect([first.key, second.key]).toEqual(["ENG-1", "ENG-2"]);
+    expect(first.position < second.position).toBe(true);
+    expect((await repos.workspaces.get(workspace.id))?.nextTaskNumber).toBe(3);
+    expect((await repos.tasks.listForBoard(board.id)).map((t) => t.title)).toEqual(["One", "Two"]);
+    expect(await repos.tasks.getByKey(workspace.id, "eng-2")).toEqual(second);
+  });
+
+  it("rejects a column from another board", async () => {
+    const { workspace, board } = await setupBoard();
+    const other = await repos.boards.create({ workspaceId: workspace.id, name: "Other", description: null });
+    const [otherColumn] = await repos.boards.listColumns(other.id);
+    await expect(repos.tasks.create(taskInput(board.id, otherColumn.id, "X"))).rejects.toBeInstanceOf(
+      NotFoundError,
+    );
+  });
+
+  it("updates fields and moves between columns", async () => {
+    const { board, columns } = await setupBoard();
+    const task = await repos.tasks.create(taskInput(board.id, columns[0].id, "One"));
+    const updated = await repos.tasks.update(task.id, { priority: "high" });
+    expect(updated).toMatchObject({ priority: "high", title: "One" });
+    const moved = await repos.tasks.move(task.id, { columnId: columns[2].id, index: 0 });
+    expect(moved.columnId).toBe(columns[2].id);
+    expect(await repos.tasks.get(task.id)).toEqual(moved);
+  });
+
+  it("inserts quick-added tasks at the start and moves by index", async () => {
+    const { board, columns } = await setupBoard();
+    const [todo] = columns;
+    const a = await repos.tasks.create(taskInput(board.id, todo.id, "A"));
+    const b = await repos.tasks.create(taskInput(board.id, todo.id, "B"));
+    const top = await repos.tasks.create({ ...taskInput(board.id, todo.id, "Top"), placement: "start" });
+    const titles = async () => (await repos.tasks.listForBoard(board.id)).map((t) => t.title);
+    expect(await titles()).toEqual(["Top", "A", "B"]);
+
+    await repos.tasks.move(top.id, { columnId: todo.id, index: 2 }); // index among the others
+    expect(await titles()).toEqual(["A", "B", "Top"]);
+    await repos.tasks.move(b.id, { columnId: todo.id, index: 0 });
+    expect(await titles()).toEqual(["B", "A", "Top"]);
+    expect(a.key).toBe("ENG-1");
+  });
+
+  it("deletes a task with its comments and detaches sub-tasks", async () => {
+    const { board, columns } = await setupBoard();
+    const parent = await repos.tasks.create(taskInput(board.id, columns[0].id, "Parent"));
+    const child = await repos.tasks.create({
+      ...taskInput(board.id, columns[0].id, "Child"),
+      parentId: parent.id,
+    });
+    await repos.comments.create({ taskId: parent.id, body: "hi", author: { kind: "user", userId: owner.id } });
+    await repos.tasks.delete(parent.id);
+    expect(await repos.tasks.get(parent.id)).toBeNull();
+    expect((await repos.tasks.get(child.id))?.parentId).toBeNull();
+    expect(await repos.comments.listForTask(parent.id)).toEqual([]);
+  });
+
+  it("lists tasks assigned to a user across the team's boards", async () => {
+    const { team, board, columns } = await setupBoard();
+    const mine = await repos.tasks.create({
+      ...taskInput(board.id, columns[0].id, "Mine"),
+      assignee: { kind: "user", userId: owner.id },
+    });
+    await repos.tasks.create(taskInput(board.id, columns[0].id, "Nobody's"));
+    expect((await repos.tasks.listAssignedTo(team.id, owner.id)).map((t) => t.id)).toEqual([mine.id]);
+  });
+});
+
+describe("columns", () => {
+  it("adds, renames and reorders columns", async () => {
+    const { board } = await setupBoard();
+    const added = await repos.boards.createColumn(board.id, "QA");
+    await repos.boards.renameColumn(added.id, "Testing");
+    await repos.boards.moveColumn(added.id, 0);
+    const names = (await repos.boards.listColumns(board.id)).map((c) => c.name);
+    expect(names).toEqual(["Testing", ...DEFAULT_COLUMNS]);
+    expect(await repos.boards.getColumn(added.id)).toMatchObject({ name: "Testing" });
+  });
+
+  it("refuses to delete a column that still has tasks, or the last column", async () => {
+    const { board, columns } = await setupBoard();
+    await repos.tasks.create(taskInput(board.id, columns[0].id, "Busy"));
+    await expect(repos.boards.deleteColumn(columns[0].id)).rejects.toBeInstanceOf(ConflictError);
+    for (const column of columns.slice(1, -1)) await repos.boards.deleteColumn(column.id);
+    await repos.tasks.delete((await repos.tasks.listForBoard(board.id))[0].id);
+    await repos.boards.deleteColumn(columns[0].id);
+    const [last] = await repos.boards.listColumns(board.id);
+    await expect(repos.boards.deleteColumn(last.id)).rejects.toBeInstanceOf(ConflictError);
+  });
+});
+
+describe("updates and cascading deletes", () => {
+  it("renames workspaces and boards", async () => {
+    const { workspace, board } = await setupBoard();
+    expect(await repos.workspaces.update(workspace.id, { name: "Platform" })).toMatchObject({ name: "Platform" });
+    expect(await repos.boards.update(board.id, { description: "Sprint work" })).toMatchObject({
+      name: "Eng",
+      description: "Sprint work",
+    });
+  });
+
+  it("deleting a workspace removes its boards, columns and tasks", async () => {
+    const { workspace, board, columns } = await setupBoard();
+    const task = await repos.tasks.create(taskInput(board.id, columns[0].id, "Gone"));
+    await repos.workspaces.delete(workspace.id);
+    expect(await repos.workspaces.get(workspace.id)).toBeNull();
+    expect(await repos.boards.get(board.id)).toBeNull();
+    expect(await repos.boards.listColumns(board.id)).toEqual([]);
+    expect(await repos.tasks.get(task.id)).toBeNull();
+  });
+
+  it("deleting a board keeps its workspace", async () => {
+    const { workspace, board } = await setupBoard();
+    await repos.boards.delete(board.id);
+    expect(await repos.boards.listForWorkspace(workspace.id)).toEqual([]);
+    expect(await repos.workspaces.get(workspace.id)).not.toBeNull();
+  });
+});
+
+describe("labels, comments and members", () => {
+  it("seeds the default labels on team creation", async () => {
+    const { team } = await setupBoard();
+    const labels = await repos.labels.listForTeam(team.id);
+    expect(labels.map((l) => l.name)).toEqual(DEFAULT_LABELS.map((l) => l.name));
+  });
+
+  it("stores comments oldest first", async () => {
+    const { board, columns } = await setupBoard();
+    const task = await repos.tasks.create(taskInput(board.id, columns[0].id, "Talk"));
+    const author = { kind: "user" as const, userId: owner.id };
+    const first = await repos.comments.create({ taskId: task.id, body: "first", author });
+    await repos.comments.create({ taskId: task.id, body: "second", author });
+    expect((await repos.comments.listForTask(task.id)).map((c) => c.body)).toEqual(["first", "second"]);
+    expect(await repos.comments.get(first.id)).toEqual(first);
+    await repos.comments.delete(first.id);
+    expect((await repos.comments.listForTask(task.id)).map((c) => c.body)).toEqual(["second"]);
+  });
+
+  it("lists members with their user records", async () => {
+    const { team } = await setupBoard();
+    expect(await repos.teams.get(team.id)).toEqual(team);
+    const [member] = await repos.memberships.listMembers(team.id);
+    expect(member).toMatchObject({ role: "owner", user: { id: owner.id, name: "Owner" } });
+  });
+});
+
+describe("invites", () => {
+  it("creates pending invites with a token and 7-day expiry, skipping duplicates and members", async () => {
+    const { team } = await setupBoard();
+    const created = await repos.invites.create({
+      teamId: team.id,
+      emails: ["a@example.test", "owner@example.test"],
+      invitedBy: owner.id,
+    });
+    expect(created.map((i) => i.email)).toEqual(["a@example.test"]);
+    const [invite] = created;
+    expect(invite.role).toBe("member");
+    expect(invite.token.length).toBeGreaterThanOrEqual(16);
+    const days = (Date.parse(invite.expiresAt) - Date.parse(invite.createdAt)) / 86_400_000;
+    expect(days).toBe(7);
+
+    const again = await repos.invites.create({ teamId: team.id, emails: ["a@example.test"], invitedBy: owner.id });
+    expect(again).toEqual([]);
+    expect(await repos.invites.listPending(team.id)).toEqual([invite]);
+  });
+});
+
+describe("profiles", () => {
+  it("updates name, avatar and theme", async () => {
+    const updated = await repos.users.update(owner.id, {
+      name: "Owner Two",
+      avatarUrl: "https://example.test/a.png",
+      theme: "light",
+    });
+    expect(updated).toMatchObject({ name: "Owner Two", avatarUrl: "https://example.test/a.png", theme: "light" });
+    expect(await repos.users.getById(owner.id)).toEqual(updated);
+  });
+});
+
+describe("team administration", () => {
+  it("renames a team", async () => {
+    const { team } = await setupBoard();
+    expect(await repos.teams.update(team.id, { name: "Acme Corp" })).toMatchObject({ name: "Acme Corp", slug: "acme" });
+  });
+
+  it("deleting a team removes everything in it", async () => {
+    const { team, workspace, board, columns } = await setupBoard();
+    const task = await repos.tasks.create(taskInput(board.id, columns[0].id, "Gone"));
+    await repos.invites.create({ teamId: team.id, emails: ["x@example.test"], invitedBy: owner.id });
+    await repos.teams.delete(team.id);
+    expect(await repos.teams.get(team.id)).toBeNull();
+    expect(await repos.workspaces.get(workspace.id)).toBeNull();
+    expect(await repos.tasks.get(task.id)).toBeNull();
+    expect(await repos.memberships.list(team.id)).toEqual([]);
+    expect(await repos.labels.listForTeam(team.id)).toEqual([]);
+    expect(await repos.invites.listPending(team.id)).toEqual([]);
+    expect(await repos.teams.listForUser(owner.id)).toEqual([]);
+  });
+
+  it("transfers ownership so there is always exactly one owner", async () => {
+    const { team } = await setupBoard();
+    const member = await joinTeam(team.id, "m@example.test");
+    await repos.memberships.transferOwnership(team.id, owner.id, member.id);
+    const roles = Object.fromEntries((await repos.memberships.list(team.id)).map((m) => [m.userId, m.role]));
+    expect(roles).toEqual({ [owner.id]: "admin", [member.id]: "owner" });
+  });
+
+  it("refuses to transfer ownership to a non-member", async () => {
+    const { team } = await setupBoard();
+    const stranger = await repos.auth.signUp({ name: "S", email: "s@example.test", password: "password1" });
+    await expect(repos.memberships.transferOwnership(team.id, owner.id, stranger.id)).rejects.toBeInstanceOf(
+      NotFoundError,
+    );
+  });
+});
+
+describe("invite lifecycle", () => {
+  it("creates invites with a role and finds them by token", async () => {
+    const { team } = await setupBoard();
+    const [invite] = await repos.invites.create({
+      teamId: team.id,
+      emails: ["lead@example.test"],
+      role: "admin",
+      invitedBy: owner.id,
+    });
+    expect(invite.role).toBe("admin");
+    expect(await repos.invites.getByToken(invite.token)).toEqual(invite);
+    expect(await repos.invites.get(invite.id)).toEqual(invite);
+  });
+
+  it("accepts an invite for the invited email only, once", async () => {
+    const { team } = await setupBoard();
+    const [invite] = await repos.invites.create({ teamId: team.id, emails: ["new@example.test"], invitedBy: owner.id });
+    const other = await repos.auth.signUp({ name: "O", email: "other@example.test", password: "password1" });
+    await expect(repos.invites.accept(invite.token, other.id)).rejects.toBeInstanceOf(ConflictError);
+
+    const invitee = await repos.auth.signUp({ name: "N", email: "new@example.test", password: "password1" });
+    const membership = await repos.invites.accept(invite.token, invitee.id);
+    expect(membership).toMatchObject({ teamId: team.id, userId: invitee.id, role: "member" });
+    expect(await repos.invites.listPending(team.id)).toEqual([]);
+    await expect(repos.invites.accept(invite.token, invitee.id)).rejects.toBeInstanceOf(ConflictError);
+  });
+
+  it("resends with a fresh token and expiry, and revokes", async () => {
+    const { team } = await setupBoard();
+    const [invite] = await repos.invites.create({ teamId: team.id, emails: ["r@example.test"], invitedBy: owner.id });
+    const resent = await repos.invites.resend(invite.id);
+    expect(resent.token).not.toBe(invite.token);
+    expect(await repos.invites.getByToken(invite.token)).toBeNull();
+    expect(resent.expiresAt >= invite.expiresAt).toBe(true);
+    await repos.invites.revoke(invite.id);
+    expect(await repos.invites.listPending(team.id)).toEqual([]);
+  });
+
+  it("rejects expired invites", async () => {
+    const store = createMemoryStore(emptyDb());
+    const local = createMockRepositories(store);
+    const boss = await local.auth.signUp({ name: "B", email: "b@example.test", password: "password1" });
+    const team = await local.teams.create({ name: "T", slug: "t-team", ownerId: boss.id });
+    const [invite] = await local.invites.create({ teamId: team.id, emails: ["late@example.test"], invitedBy: boss.id });
+    await store.write((db) => {
+      db.invites[0].expiresAt = "2000-01-01T00:00:00.000Z";
+    });
+    const late = await local.auth.signUp({ name: "L", email: "late@example.test", password: "password1" });
+    await expect(local.invites.accept(invite.token, late.id)).rejects.toThrow(/expired/);
+  });
+});
+
+describe("label management", () => {
+  it("creates, renames, recolours and deletes labels, removing them from tasks", async () => {
+    const { team, board, columns } = await setupBoard();
+    const label = await repos.labels.create(team.id, { name: "Ops", color: "green" });
+    expect(await repos.labels.get(label.id)).toEqual(label);
+    await expect(repos.labels.create(team.id, { name: "ops", color: "red" })).rejects.toBeInstanceOf(ConflictError);
+
+    expect(await repos.labels.update(label.id, { name: "Infra", color: "orange" })).toMatchObject({
+      name: "Infra",
+      color: "orange",
+    });
+    const task = await repos.tasks.create({ ...taskInput(board.id, columns[0].id, "Tagged"), labelIds: [label.id] });
+    await repos.labels.delete(label.id);
+    expect(await repos.labels.get(label.id)).toBeNull();
+    expect((await repos.tasks.get(task.id))?.labelIds).toEqual([]);
+  });
+
+  it("refuses to rename a label onto another label's name", async () => {
+    const { team } = await setupBoard();
+    const [bug, feature] = await repos.labels.listForTeam(team.id);
+    await expect(repos.labels.update(feature.id, { name: bug.name.toUpperCase() })).rejects.toBeInstanceOf(
+      ConflictError,
+    );
+  });
+});
+```
+
+- [ ] **Step 2: Run them to verify they fail**
+
+Run: `pnpm test src/server/data`
+Expected: FAIL — 11 tests (`repos.users.update is not a function`, …).
+
+- [ ] **Step 3: Implement**
+
+Replace `src/server/data/types.ts`:
+
+```ts
+import type {
+  Board,
+  Column,
+  Comment,
+  CommentAuthor,
+  CreateCommentInput,
+  CreateBoardInput,
+  CreateInvitesInput,
+  CreateTaskInput,
+  CreateTeamInput,
+  CreateWorkspaceInput,
+  Invite,
+  InviteRole,
+  Label,
+  LabelInput,
+  Membership,
+  Role,
+  SignInInput,
+  SignUpInput,
+  Task,
+  Team,
+  UpdateBoardInput,
+  UpdateLabelInput,
+  UpdateProfileInput,
+  UpdateTaskInput,
+  UpdateTeamInput,
+  UpdateWorkspaceInput,
+  User,
+  Workspace,
+} from "@/lib/domain";
+
+export type TeamMember = Membership & { user: User };
+
+// Every backend (mock in M1, Supabase in M4) implements these. UI and server
+// actions depend only on this file, never on a concrete backend.
+// Methods throw NotFoundError / ConflictError from ./errors.
+
+export interface AuthRepo {
+  /** Creates the user and their credentials. Throws ConflictError("email") if taken. */
+  signUp(input: SignUpInput): Promise<User>;
+  /** Returns the user, or null for an unknown email or wrong password. */
+  signIn(input: SignInInput): Promise<User | null>;
+}
+
+export interface UsersRepo {
+  getById(id: string): Promise<User | null>;
+  getByEmail(email: string): Promise<User | null>;
+  update(id: string, patch: Partial<UpdateProfileInput>): Promise<User>;
+}
+
+export interface TeamsRepo {
+  /** Creates the team, makes `ownerId` its owner and seeds DEFAULT_LABELS. */
+  create(input: CreateTeamInput & { ownerId: string }): Promise<Team>;
+  get(id: string): Promise<Team | null>;
+  getBySlug(slug: string): Promise<Team | null>;
+  listForUser(userId: string): Promise<Team[]>;
+  update(id: string, patch: UpdateTeamInput): Promise<Team>;
+  /** Deletes the team with its memberships, invites, labels and every workspace. */
+  delete(id: string): Promise<void>;
+}
+
+export interface MembershipsRepo {
+  list(teamId: string): Promise<Membership[]>;
+  get(teamId: string, userId: string): Promise<Membership | null>;
+  /** Memberships joined with their users, ordered by name. */
+  listMembers(teamId: string): Promise<TeamMember[]>;
+  setRole(teamId: string, userId: string, role: Role): Promise<Membership>;
+  remove(teamId: string, userId: string): Promise<void>;
+  /** Makes `toUserId` (a member) the owner and demotes the current owner to admin, atomically. */
+  transferOwnership(teamId: string, fromUserId: string, toUserId: string): Promise<void>;
+}
+
+export interface WorkspacesRepo {
+  create(input: CreateWorkspaceInput): Promise<Workspace>;
+  get(id: string): Promise<Workspace | null>;
+  listForTeam(teamId: string): Promise<Workspace[]>;
+  update(id: string, patch: UpdateWorkspaceInput): Promise<Workspace>;
+  /** Deletes the workspace with all of its boards, columns, tasks and comments. */
+  delete(id: string): Promise<void>;
+}
+
+export interface BoardsRepo {
+  /** Creates the board and seeds DEFAULT_COLUMNS. */
+  create(input: CreateBoardInput): Promise<Board>;
+  get(id: string): Promise<Board | null>;
+  listForWorkspace(workspaceId: string): Promise<Board[]>;
+  update(id: string, patch: UpdateBoardInput): Promise<Board>;
+  /** Deletes the board with its columns, tasks and comments. */
+  delete(id: string): Promise<void>;
+  listColumns(boardId: string): Promise<Column[]>;
+  getColumn(id: string): Promise<Column | null>;
+  /** Appends a column at the end of the board. */
+  createColumn(boardId: string, name: string): Promise<Column>;
+  renameColumn(id: string, name: string): Promise<Column>;
+  /** Moves the column to `index` among the board's other columns. */
+  moveColumn(id: string, index: number): Promise<Column>;
+  /** Throws ConflictError("column") if the column still has tasks or is the board's last. */
+  deleteColumn(id: string): Promise<void>;
+}
+
+export interface TasksRepo {
+  /**
+   * Allocates the next task number for the board's workspace and places the
+   * task at the end of its column (or the start, for quick-add).
+   */
+  create(input: CreateTaskInput & { createdBy: string; placement?: "start" | "end" }): Promise<Task>;
+  get(id: string): Promise<Task | null>;
+  getByKey(workspaceId: string, key: string): Promise<Task | null>;
+  listForBoard(boardId: string): Promise<Task[]>;
+  /** Tasks in any of the team's boards assigned to the user, most recently updated first. */
+  listAssignedTo(teamId: string, userId: string): Promise<Task[]>;
+  update(id: string, patch: UpdateTaskInput): Promise<Task>;
+  /** Moves the task to `index` among the other tasks of `columnId` (same board). */
+  move(id: string, to: { columnId: string; index: number }): Promise<Task>;
+  /** Deletes the task and its comments; its sub-tasks become top-level. */
+  delete(id: string): Promise<void>;
+}
+
+export interface LabelsRepo {
+  listForTeam(teamId: string): Promise<Label[]>;
+  get(id: string): Promise<Label | null>;
+  /** Names are unique per team, ignoring case: ConflictError("name"). */
+  create(teamId: string, input: LabelInput): Promise<Label>;
+  update(id: string, patch: UpdateLabelInput): Promise<Label>;
+  /** Deletes the label and removes it from every task. */
+  delete(id: string): Promise<void>;
+}
+
+export interface CommentsRepo {
+  /** Oldest first. */
+  listForTask(taskId: string): Promise<Comment[]>;
+  get(id: string): Promise<Comment | null>;
+  create(input: CreateCommentInput & { author: CommentAuthor }): Promise<Comment>;
+  delete(id: string): Promise<void>;
+}
+
+export interface InvitesRepo {
+  /** Creates invites (default role: member) valid for INVITE_TTL_DAYS, skipping members and pending invites. */
+  create(input: Omit<CreateInvitesInput, "role"> & { role?: InviteRole; invitedBy: string }): Promise<Invite[]>;
+  listPending(teamId: string): Promise<Invite[]>;
+  get(id: string): Promise<Invite | null>;
+  getByToken(token: string): Promise<Invite | null>;
+  /** Issues a new token and expiry (the old link stops working). */
+  resend(id: string): Promise<Invite>;
+  revoke(id: string): Promise<void>;
+  /**
+   * Adds the user to the team with the invite's role. ConflictError("token")
+   * if the invite was already used or has expired, ConflictError("email") if
+   * it was sent to a different address.
+   */
+  accept(token: string, userId: string): Promise<Membership>;
+}
+
+export interface Repositories {
+  auth: AuthRepo;
+  users: UsersRepo;
+  teams: TeamsRepo;
+  memberships: MembershipsRepo;
+  workspaces: WorkspacesRepo;
+  boards: BoardsRepo;
+  tasks: TasksRepo;
+  invites: InvitesRepo;
+  labels: LabelsRepo;
+  comments: CommentsRepo;
+}
+```
+
+Replace `src/server/data/mock/repositories.ts`:
+
+```ts
+import { randomBytes, randomUUID } from "node:crypto";
+import { generateNKeysBetween } from "fractional-indexing";
+import {
+  DEFAULT_COLUMNS,
+  DEFAULT_LABELS,
+  INVITE_TTL_DAYS,
+  byPosition,
+  formatTaskKey,
+  positionAt,
+  type Column,
+  type Comment,
+  type Invite,
+  type Membership,
+  type Task,
+  type User,
+} from "@/lib/domain";
+import { ConflictError, NotFoundError } from "../errors";
+import type { Repositories } from "../types";
+import type { MockDb } from "./db";
+import { hashPassword, verifyPassword } from "./password";
+import type { MockStore } from "./store";
+
+const DAY_MS = 86_400_000;
+
+const newId = () => randomUUID();
+const now = () => new Date().toISOString();
+
+function byCreatedAt(a: { createdAt: string }, b: { createdAt: string }) {
+  return a.createdAt.localeCompare(b.createdAt);
+}
+
+function find<T>(items: T[], predicate: (item: T) => boolean, entity: string, id: string): T {
+  const item = items.find(predicate);
+  if (!item) throw new NotFoundError(entity, id);
+  return item;
+}
+
+function findColumn(db: MockDb, boardId: string, columnId: string): Column {
+  return find(db.columns, (c) => c.id === columnId && c.boardId === boardId, "Column", columnId);
+}
+
+/** Sorted positions of a column's tasks, optionally leaving one task out (the one being moved). */
+function taskPositions(db: MockDb, columnId: string, excludeId?: string): string[] {
+  return db.tasks
+    .filter((t) => t.columnId === columnId && t.id !== excludeId)
+    .sort(byPosition)
+    .map((t) => t.position);
+}
+
+function deleteTasks(db: MockDb, taskIds: Set<string>) {
+  db.tasks = db.tasks.filter((t) => !taskIds.has(t.id));
+  db.comments = db.comments.filter((c) => !taskIds.has(c.taskId));
+  for (const task of db.tasks) {
+    if (task.parentId && taskIds.has(task.parentId)) task.parentId = null;
+  }
+}
+
+function inviteExpiry(from: Date) {
+  return new Date(from.getTime() + INVITE_TTL_DAYS * DAY_MS).toISOString();
+}
+
+function assertUniqueLabelName(db: MockDb, teamId: string, name: string, exceptId?: string) {
+  const taken = db.labels.some(
+    (l) => l.teamId === teamId && l.id !== exceptId && l.name.toLowerCase() === name.toLowerCase(),
+  );
+  if (taken) throw new ConflictError("name", "A label with this name already exists");
+}
+
+function deleteBoards(db: MockDb, boardIds: Set<string>) {
+  deleteTasks(db, new Set(db.tasks.filter((t) => boardIds.has(t.boardId)).map((t) => t.id)));
+  db.columns = db.columns.filter((c) => !boardIds.has(c.boardId));
+  db.boards = db.boards.filter((b) => !boardIds.has(b.id));
+}
+
+export function createMockRepositories(store: MockStore): Repositories {
+  return {
+    auth: {
+      async signUp({ name, email, password }) {
+        const normalized = email.toLowerCase();
+        const passwordHash = await hashPassword(password);
+        return store.write((db) => {
+          if (db.users.some((u) => u.email === normalized)) {
+            throw new ConflictError("email", "An account with this email already exists");
+          }
+          const user: User = { id: newId(), email: normalized, name, avatarUrl: null, createdAt: now() };
+          db.users.push(user);
+          db.credentials.push({ userId: user.id, passwordHash });
+          return user;
+        });
+      },
+
+      async signIn({ email, password }) {
+        const found = await store.read((db) => {
+          const user = db.users.find((u) => u.email === email.toLowerCase());
+          const credentials = user && db.credentials.find((c) => c.userId === user.id);
+          return user && credentials ? { user, passwordHash: credentials.passwordHash } : null;
+        });
+        if (!found || !(await verifyPassword(password, found.passwordHash))) return null;
+        return found.user;
+      },
+    },
+
+    users: {
+      getById: (id) => store.read((db) => db.users.find((u) => u.id === id) ?? null),
+      getByEmail: (email) =>
+        store.read((db) => db.users.find((u) => u.email === email.toLowerCase()) ?? null),
+      update: (id, patch) =>
+        store.write((db) => {
+          const user = find(db.users, (u) => u.id === id, "User", id);
+          Object.assign(user, patch);
+          return user;
+        }),
+    },
+
+    teams: {
+      create: ({ name, slug, ownerId }) =>
+        store.write((db) => {
+          if (db.teams.some((t) => t.slug === slug)) {
+            throw new ConflictError("slug", "This URL is already taken");
+          }
+          const team = { id: newId(), name, slug, plan: "lite" as const, createdAt: now() };
+          db.teams.push(team);
+          db.memberships.push({ teamId: team.id, userId: ownerId, role: "owner", joinedAt: now() });
+          for (const label of DEFAULT_LABELS) db.labels.push({ id: newId(), teamId: team.id, ...label });
+          return team;
+        }),
+      get: (id) => store.read((db) => db.teams.find((t) => t.id === id) ?? null),
+      getBySlug: (slug) => store.read((db) => db.teams.find((t) => t.slug === slug) ?? null),
+      listForUser: (userId) =>
+        store.read((db) => {
+          const teamIds = new Set(db.memberships.filter((m) => m.userId === userId).map((m) => m.teamId));
+          return db.teams.filter((t) => teamIds.has(t.id)).sort((a, b) => a.name.localeCompare(b.name));
+        }),
+      update: (id, patch) =>
+        store.write((db) => {
+          const team = find(db.teams, (t) => t.id === id, "Team", id);
+          Object.assign(team, patch);
+          return team;
+        }),
+      delete: (id) =>
+        store.write((db) => {
+          const workspaceIds = new Set(db.workspaces.filter((w) => w.teamId === id).map((w) => w.id));
+          deleteBoards(db, new Set(db.boards.filter((b) => workspaceIds.has(b.workspaceId)).map((b) => b.id)));
+          db.workspaces = db.workspaces.filter((w) => w.teamId !== id);
+          db.labels = db.labels.filter((l) => l.teamId !== id);
+          db.invites = db.invites.filter((i) => i.teamId !== id);
+          db.memberships = db.memberships.filter((m) => m.teamId !== id);
+          db.teams = db.teams.filter((t) => t.id !== id);
+        }),
+    },
+
+    memberships: {
+      list: (teamId) => store.read((db) => db.memberships.filter((m) => m.teamId === teamId)),
+      get: (teamId, userId) =>
+        store.read((db) => db.memberships.find((m) => m.teamId === teamId && m.userId === userId) ?? null),
+      listMembers: (teamId) =>
+        store.read((db) =>
+          db.memberships
+            .filter((m) => m.teamId === teamId)
+            .flatMap((m) => {
+              const user = db.users.find((u) => u.id === m.userId);
+              return user ? [{ ...m, user }] : [];
+            })
+            .sort((a, b) => a.user.name.localeCompare(b.user.name)),
+        ),
+      setRole: (teamId, userId, role) =>
+        store.write((db) => {
+          const membership = find(
+            db.memberships,
+            (m) => m.teamId === teamId && m.userId === userId,
+            "Membership",
+            `${teamId}/${userId}`,
+          );
+          membership.role = role;
+          return membership;
+        }),
+      remove: (teamId, userId) =>
+        store.write((db) => {
+          db.memberships = db.memberships.filter((m) => !(m.teamId === teamId && m.userId === userId));
+        }),
+      transferOwnership: (teamId, fromUserId, toUserId) =>
+        store.write((db) => {
+          const member = (userId: string) =>
+            find(db.memberships, (m) => m.teamId === teamId && m.userId === userId, "Membership", `${teamId}/${userId}`);
+          const from = member(fromUserId);
+          const to = member(toUserId);
+          if (from.role !== "owner") throw new ConflictError("owner", "Only the owner can transfer ownership");
+          from.role = "admin";
+          to.role = "owner";
+        }),
+    },
+
+    workspaces: {
+      create: ({ teamId, name, keyPrefix }) =>
+        store.write((db) => {
+          find(db.teams, (t) => t.id === teamId, "Team", teamId);
+          if (db.workspaces.some((w) => w.teamId === teamId && w.keyPrefix === keyPrefix)) {
+            throw new ConflictError("keyPrefix", "Another workspace already uses this prefix");
+          }
+          const workspace = { id: newId(), teamId, name, keyPrefix, nextTaskNumber: 1, createdAt: now() };
+          db.workspaces.push(workspace);
+          return workspace;
+        }),
+      get: (id) => store.read((db) => db.workspaces.find((w) => w.id === id) ?? null),
+      listForTeam: (teamId) =>
+        store.read((db) => db.workspaces.filter((w) => w.teamId === teamId).sort(byCreatedAt)),
+      update: (id, patch) =>
+        store.write((db) => {
+          const workspace = find(db.workspaces, (w) => w.id === id, "Workspace", id);
+          Object.assign(workspace, patch);
+          return workspace;
+        }),
+      delete: (id) =>
+        store.write((db) => {
+          deleteBoards(db, new Set(db.boards.filter((b) => b.workspaceId === id).map((b) => b.id)));
+          db.workspaces = db.workspaces.filter((w) => w.id !== id);
+        }),
+    },
+
+    boards: {
+      create: ({ workspaceId, name, description }) =>
+        store.write((db) => {
+          find(db.workspaces, (w) => w.id === workspaceId, "Workspace", workspaceId);
+          const board = { id: newId(), workspaceId, name, description, createdAt: now() };
+          db.boards.push(board);
+          const positions = generateNKeysBetween(null, null, DEFAULT_COLUMNS.length);
+          DEFAULT_COLUMNS.forEach((columnName, i) => {
+            db.columns.push({ id: newId(), boardId: board.id, name: columnName, position: positions[i] });
+          });
+          return board;
+        }),
+      get: (id) => store.read((db) => db.boards.find((b) => b.id === id) ?? null),
+      listForWorkspace: (workspaceId) =>
+        store.read((db) => db.boards.filter((b) => b.workspaceId === workspaceId).sort(byCreatedAt)),
+      update: (id, patch) =>
+        store.write((db) => {
+          const board = find(db.boards, (b) => b.id === id, "Board", id);
+          Object.assign(board, patch);
+          return board;
+        }),
+      delete: (id) => store.write((db) => deleteBoards(db, new Set([id]))),
+      listColumns: (boardId) =>
+        store.read((db) => db.columns.filter((c) => c.boardId === boardId).sort(byPosition)),
+      getColumn: (id) => store.read((db) => db.columns.find((c) => c.id === id) ?? null),
+      createColumn: (boardId, name) =>
+        store.write((db) => {
+          find(db.boards, (b) => b.id === boardId, "Board", boardId);
+          const positions = db.columns.filter((c) => c.boardId === boardId).sort(byPosition).map((c) => c.position);
+          const column = { id: newId(), boardId, name, position: positionAt(positions, positions.length) };
+          db.columns.push(column);
+          return column;
+        }),
+      renameColumn: (id, name) =>
+        store.write((db) => {
+          const column = find(db.columns, (c) => c.id === id, "Column", id);
+          column.name = name;
+          return column;
+        }),
+      moveColumn: (id, index) =>
+        store.write((db) => {
+          const column = find(db.columns, (c) => c.id === id, "Column", id);
+          const others = db.columns
+            .filter((c) => c.boardId === column.boardId && c.id !== id)
+            .sort(byPosition)
+            .map((c) => c.position);
+          column.position = positionAt(others, index);
+          return column;
+        }),
+      deleteColumn: (id) =>
+        store.write((db) => {
+          const column = find(db.columns, (c) => c.id === id, "Column", id);
+          if (db.tasks.some((t) => t.columnId === id)) {
+            throw new ConflictError("column", "Move or delete this column's tasks first");
+          }
+          if (db.columns.filter((c) => c.boardId === column.boardId).length === 1) {
+            throw new ConflictError("column", "A board needs at least one column");
+          }
+          db.columns = db.columns.filter((c) => c.id !== id);
+        }),
+    },
+
+    tasks: {
+      create: ({ placement = "end", ...input }) =>
+        store.write((db) => {
+          const board = find(db.boards, (b) => b.id === input.boardId, "Board", input.boardId);
+          const workspace = find(db.workspaces, (w) => w.id === board.workspaceId, "Workspace", board.workspaceId);
+          findColumn(db, board.id, input.columnId);
+          const positions = taskPositions(db, input.columnId);
+          const number = workspace.nextTaskNumber++;
+          const timestamp = now();
+          const task: Task = {
+            ...input,
+            id: newId(),
+            number,
+            key: formatTaskKey(workspace.keyPrefix, number),
+            position: positionAt(positions, placement === "start" ? 0 : positions.length),
+            createdAt: timestamp,
+            updatedAt: timestamp,
+          };
+          db.tasks.push(task);
+          return task;
+        }),
+      get: (id) => store.read((db) => db.tasks.find((t) => t.id === id) ?? null),
+      getByKey: (workspaceId, key) =>
+        store.read((db) => {
+          const boardIds = new Set(db.boards.filter((b) => b.workspaceId === workspaceId).map((b) => b.id));
+          const wanted = key.trim().toUpperCase();
+          return db.tasks.find((t) => boardIds.has(t.boardId) && t.key === wanted) ?? null;
+        }),
+      listForBoard: (boardId) =>
+        store.read((db) => db.tasks.filter((t) => t.boardId === boardId).sort(byPosition)),
+      listAssignedTo: (teamId, userId) =>
+        store.read((db) => {
+          const workspaceIds = new Set(db.workspaces.filter((w) => w.teamId === teamId).map((w) => w.id));
+          const boardIds = new Set(db.boards.filter((b) => workspaceIds.has(b.workspaceId)).map((b) => b.id));
+          return db.tasks
+            .filter((t) => boardIds.has(t.boardId) && t.assignee?.kind === "user" && t.assignee.userId === userId)
+            .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+        }),
+      update: (id, patch) =>
+        store.write((db) => {
+          const task = find(db.tasks, (t) => t.id === id, "Task", id);
+          Object.assign(task, patch, { updatedAt: now() });
+          return task;
+        }),
+      move: (id, { columnId, index }) =>
+        store.write((db) => {
+          const task = find(db.tasks, (t) => t.id === id, "Task", id);
+          findColumn(db, task.boardId, columnId);
+          const position = positionAt(taskPositions(db, columnId, id), index);
+          Object.assign(task, { columnId, position, updatedAt: now() });
+          return task;
+        }),
+      delete: (id) => store.write((db) => deleteTasks(db, new Set([id]))),
+    },
+
+    labels: {
+      listForTeam: (teamId) => store.read((db) => db.labels.filter((l) => l.teamId === teamId)),
+      get: (id) => store.read((db) => db.labels.find((l) => l.id === id) ?? null),
+      create: (teamId, { name, color }) =>
+        store.write((db) => {
+          find(db.teams, (t) => t.id === teamId, "Team", teamId);
+          assertUniqueLabelName(db, teamId, name);
+          const label = { id: newId(), teamId, name, color };
+          db.labels.push(label);
+          return label;
+        }),
+      update: (id, patch) =>
+        store.write((db) => {
+          const label = find(db.labels, (l) => l.id === id, "Label", id);
+          if (patch.name) assertUniqueLabelName(db, label.teamId, patch.name, id);
+          Object.assign(label, patch);
+          return label;
+        }),
+      delete: (id) =>
+        store.write((db) => {
+          db.labels = db.labels.filter((l) => l.id !== id);
+          for (const task of db.tasks) {
+            if (task.labelIds.includes(id)) task.labelIds = task.labelIds.filter((labelId) => labelId !== id);
+          }
+        }),
+    },
+
+    comments: {
+      listForTask: (taskId) =>
+        store.read((db) => db.comments.filter((c) => c.taskId === taskId).sort(byCreatedAt)),
+      get: (id) => store.read((db) => db.comments.find((c) => c.id === id) ?? null),
+      create: ({ taskId, body, author }) =>
+        store.write((db) => {
+          find(db.tasks, (t) => t.id === taskId, "Task", taskId);
+          const comment: Comment = { id: newId(), taskId, body, author, createdAt: now() };
+          db.comments.push(comment);
+          return comment;
+        }),
+      delete: (id) =>
+        store.write((db) => {
+          db.comments = db.comments.filter((c) => c.id !== id);
+        }),
+    },
+
+    invites: {
+      create: ({ teamId, emails, invitedBy, role = "member" }) =>
+        store.write((db) => {
+          find(db.teams, (t) => t.id === teamId, "Team", teamId);
+          const memberIds = new Set(db.memberships.filter((m) => m.teamId === teamId).map((m) => m.userId));
+          const createdAt = new Date();
+          const pending = db.invites.filter(
+            (i) => i.teamId === teamId && i.acceptedAt === null && i.expiresAt > createdAt.toISOString(),
+          );
+          const taken = new Set([
+            ...db.users.filter((u) => memberIds.has(u.id)).map((u) => u.email),
+            ...pending.map((i) => i.email),
+          ]);
+          const created: Invite[] = [];
+          for (const email of new Set(emails.map((e) => e.toLowerCase()))) {
+            if (taken.has(email)) continue;
+            created.push({
+              id: newId(),
+              teamId,
+              email,
+              role,
+              token: randomBytes(24).toString("base64url"),
+              invitedBy,
+              expiresAt: inviteExpiry(createdAt),
+              acceptedAt: null,
+              createdAt: createdAt.toISOString(),
+            });
+          }
+          db.invites.push(...created);
+          return created;
+        }),
+      listPending: (teamId) =>
+        store.read((db) => {
+          const current = now();
+          return db.invites.filter(
+            (i) => i.teamId === teamId && i.acceptedAt === null && i.expiresAt > current,
+          );
+        }),
+      get: (id) => store.read((db) => db.invites.find((i) => i.id === id) ?? null),
+      getByToken: (token) => store.read((db) => db.invites.find((i) => i.token === token) ?? null),
+      resend: (id) =>
+        store.write((db) => {
+          const invite = find(db.invites, (i) => i.id === id, "Invite", id);
+          if (invite.acceptedAt) throw new ConflictError("token", "This invite was already accepted");
+          invite.token = randomBytes(24).toString("base64url");
+          invite.expiresAt = inviteExpiry(new Date());
+          return invite;
+        }),
+      revoke: (id) =>
+        store.write((db) => {
+          db.invites = db.invites.filter((i) => i.id !== id);
+        }),
+      accept: (token, userId) =>
+        store.write((db) => {
+          const invite = find(db.invites, (i) => i.token === token, "Invite", "token");
+          const user = find(db.users, (u) => u.id === userId, "User", userId);
+          if (invite.acceptedAt) throw new ConflictError("token", "This invite has already been used");
+          if (invite.expiresAt <= now()) throw new ConflictError("token", "This invite has expired");
+          if (invite.email !== user.email) {
+            throw new ConflictError("email", `This invite was sent to ${invite.email}`);
+          }
+          invite.acceptedAt = now();
+          const existing = db.memberships.find((m) => m.teamId === invite.teamId && m.userId === userId);
+          if (existing) return existing;
+          const membership: Membership = { teamId: invite.teamId, userId, role: invite.role, joinedAt: now() };
+          db.memberships.push(membership);
+          return membership;
+        }),
+    },
+  };
+}
+```
+
+- [ ] **Step 4: Verify**
+
+Run: `pnpm test && pnpm lint && pnpm typecheck`
+Expected: 169 tests pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add -A
+git commit -m "feat(data): add profile, team admin, invite lifecycle and label repositories"
+```
+
+---
+
+### Task 3: Permissions — who can manage whom
+
+**Files:**
+- Modify: `src/server/auth/permissions.ts`, `src/server/auth/permissions.test.ts`
+
+**Interfaces:**
+- Produces: actions `team:update`, `label:manage` (owners/admins), `team:delete`, `ownership:transfer` (owner); `canManageMember(actor, target)`, `assignableRoles(actor)`, `canLeaveTeam(role)`.
+
+- [ ] **Step 1: Write the failing tests**
+
+Replace `src/server/auth/permissions.test.ts`:
+
+```ts
+import { describe, expect, it } from "vitest";
+import { ForbiddenError, assertCan, assignableRoles, can, canLeaveTeam, canManageMember } from "./permissions";
+
+describe("can", () => {
+  it.each(["team:read", "task:create", "task:update", "task:delete", "comment:create"] as const)(
+    "lets every role %s",
+    (action) => {
+      for (const role of ["owner", "admin", "member"] as const) expect(can(role, action)).toBe(true);
+    },
+  );
+
+  it.each([
+    "workspace:create",
+    "workspace:update",
+    "workspace:delete",
+    "board:create",
+    "board:update",
+    "board:delete",
+    "column:manage",
+    "comment:moderate",
+    "member:invite",
+    "team:update",
+    "label:manage",
+  ] as const)("limits %s to owners and admins", (action) => {
+    expect(can("owner", action)).toBe(true);
+    expect(can("admin", action)).toBe(true);
+    expect(can("member", action)).toBe(false);
+  });
+
+  it.each(["team:delete", "ownership:transfer"] as const)("limits %s to the owner", (action) => {
+    expect(can("owner", action)).toBe(true);
+    expect(can("admin", action)).toBe(false);
+    expect(can("member", action)).toBe(false);
+  });
+});
+
+describe("assertCan", () => {
+  it("throws ForbiddenError when the role lacks the permission", () => {
+    expect(() => assertCan("member", "member:invite")).toThrow(ForbiddenError);
+    expect(() => assertCan("admin", "member:invite")).not.toThrow();
+  });
+});
+
+describe("member management", () => {
+  it("lets the owner manage admins and members, admins manage members, and nobody manage the owner", () => {
+    expect(canManageMember("owner", "admin")).toBe(true);
+    expect(canManageMember("owner", "member")).toBe(true);
+    expect(canManageMember("admin", "member")).toBe(true);
+    expect(canManageMember("admin", "admin")).toBe(false);
+    expect(canManageMember("member", "member")).toBe(false);
+    for (const actor of ["owner", "admin", "member"] as const) expect(canManageMember(actor, "owner")).toBe(false);
+  });
+
+  it("offers admin and member as assignable roles to managers only", () => {
+    expect(assignableRoles("owner")).toEqual(["admin", "member"]);
+    expect(assignableRoles("admin")).toEqual(["admin", "member"]);
+    expect(assignableRoles("member")).toEqual([]);
+  });
+
+  it("requires the owner to hand over ownership before leaving", () => {
+    expect(canLeaveTeam("owner")).toBe(false);
+    expect(canLeaveTeam("admin")).toBe(true);
+    expect(canLeaveTeam("member")).toBe(true);
+  });
+});
+```
+
+- [ ] **Step 2: Run them to verify they fail**
+
+Run: `pnpm test src/server/auth`
+Expected: FAIL — 7 tests.
+
+- [ ] **Step 3: Implement**
+
+Replace `src/server/auth/permissions.ts`:
+
+```ts
+import type { InviteRole, Role } from "@/lib/domain";
+
+// Single source of truth for role checks. M3 adds member-management actions.
+const EVERYONE = ["owner", "admin", "member"] as const;
+const MANAGERS = ["owner", "admin"] as const;
+const OWNER = ["owner"] as const;
+
+const RULES = {
+  "team:read": EVERYONE,
+  "task:create": EVERYONE,
+  "task:update": EVERYONE,
+  "task:delete": EVERYONE,
+  "comment:create": EVERYONE,
+  "comment:moderate": MANAGERS, // delete other people's comments
+  "workspace:create": MANAGERS,
+  "workspace:update": MANAGERS,
+  "workspace:delete": MANAGERS,
+  "board:create": MANAGERS,
+  "board:update": MANAGERS,
+  "board:delete": MANAGERS,
+  "column:manage": MANAGERS,
+  "member:invite": MANAGERS,
+  "team:update": MANAGERS,
+  "label:manage": MANAGERS,
+  "team:delete": OWNER,
+  "ownership:transfer": OWNER,
+} as const satisfies Record<string, readonly Role[]>;
+
+export type Action = keyof typeof RULES;
+
+export class ForbiddenError extends Error {
+  constructor(role: Role, action: Action) {
+    super(`A ${role} cannot ${action}`);
+    this.name = "ForbiddenError";
+  }
+}
+
+export function can(role: Role, action: Action): boolean {
+  return (RULES[action] as readonly Role[]).includes(role);
+}
+
+export function assertCan(role: Role, action: Action): void {
+  if (!can(role, action)) throw new ForbiddenError(role, action);
+}
+
+/**
+ * Whether `actor` may change `target`'s role or remove them. The owner manages
+ * admins and members; admins manage members; nobody manages the owner
+ * (ownership moves only through an explicit transfer).
+ */
+export function canManageMember(actor: Role, target: Role): boolean {
+  if (target === "owner") return false;
+  if (actor === "owner") return true;
+  return actor === "admin" && target === "member";
+}
+
+/** Roles `actor` can give to someone they manage (never "owner"). */
+export function assignableRoles(actor: Role): InviteRole[] {
+  return actor === "member" ? [] : ["admin", "member"];
+}
+
+/** The owner has to transfer ownership before leaving, so a team always has one. */
+export function canLeaveTeam(role: Role): boolean {
+  return role !== "owner";
+}
+```
+
+- [ ] **Step 4: Verify**
+
+Run: `pnpm test && pnpm lint && pnpm typecheck`
+Expected: 176 tests pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add -A
+git commit -m "feat(auth): add member-management and team permissions"
+```
+
+---
+
+### Task 4: Server actions — members, invites, team, labels, profile
+
+**Files:**
+- Create: `src/server/actions/members.ts`, `invites.ts`, `team.ts`, `labels.ts`, `profile.ts`
+- Modify: `src/lib/paths.ts`, `src/server/auth/guards.ts`, `src/server/actions/shared.ts`, `src/server/actions/onboarding.ts`, `src/server/actions/auth.ts`
+
+**Interfaces:**
+- Produces: `settingsPath(teamSlug, section?)`, `invitePath(token)`; guards `requireLabelAccess`, `requireInviteAccess`; helpers `absoluteUrl(path)`, `deliverInvites(invites)`; actions — form: `inviteMembersAction`, `updateTeamAction`, `createLabelAction`, `updateProfileAction`; imperative: `resendInviteAction(id)`, `revokeInviteAction(id)`, `changeRoleAction(teamSlug, userId, role)`, `removeMemberAction(teamSlug, userId)`, `transferOwnershipAction(teamSlug, userId)`, `leaveTeamAction(teamSlug)` (→ `/`), `acceptInviteAction(token)` (→ team), `deleteTeamAction(teamSlug)` (→ `/`), `updateLabelAction(id, patch)`, `deleteLabelAction(id)`, `setThemePreferenceAction(theme)`. `signUpAction` now follows a safe `next` (invitees) and otherwise goes to onboarding.
+
+- [ ] **Step 1: Paths, guards, helpers**
+
+Replace `src/lib/paths.ts`:
+
+```ts
+// Every in-app URL is built here so routes can move without hunting strings.
+export const ONBOARDING_PATH = "/onboarding";
+
+export const teamPath = (teamSlug: string) => `/${teamSlug}`;
+export const boardPath = (teamSlug: string, boardId: string) => `/${teamSlug}/board/${boardId}`;
+export const onboardingWorkspacePath = (teamSlug: string) => `${ONBOARDING_PATH}/${teamSlug}/workspace`;
+export const onboardingInvitePath = (teamSlug: string, boardId: string) =>
+  `${ONBOARDING_PATH}/${teamSlug}/invite?board=${encodeURIComponent(boardId)}`;
+
+export type SettingsSection = "general" | "members" | "labels" | "profile";
+export const settingsPath = (teamSlug: string, section: SettingsSection = "general") =>
+  section === "general" ? `/${teamSlug}/settings` : `/${teamSlug}/settings/${section}`;
+export const invitePath = (token: string) => `/invite/${token}`;
+```
+
+Replace `src/server/auth/guards.ts`:
+
+```ts
+import "server-only";
+import { notFound } from "next/navigation";
+import { cache } from "react";
+import { getRepositories } from "@/server/data";
+import { requireUser } from "./session";
+
+/** Loads the team by slug and the caller's membership; 404s for non-members. */
+export const requireTeamMember = cache(async (teamSlug: string) => {
+  const user = await requireUser();
+  const repos = getRepositories();
+  const team = await repos.teams.getBySlug(teamSlug);
+  const membership = team ? await repos.memberships.get(team.id, user.id) : null;
+  if (!team || !membership) notFound();
+  return { user, team, membership };
+});
+
+// The helpers below resolve an entity id up to its team and check membership,
+// so server actions can trust ids coming from the client. Unknown ids and
+// other teams' ids both 404.
+
+export const requireWorkspaceAccess = cache(async (workspaceId: string) => {
+  const user = await requireUser();
+  const repos = getRepositories();
+  const workspace = await repos.workspaces.get(workspaceId);
+  const team = workspace ? await repos.teams.get(workspace.teamId) : null;
+  const membership = team ? await repos.memberships.get(team.id, user.id) : null;
+  if (!workspace || !team || !membership) notFound();
+  return { user, team, membership, workspace };
+});
+
+export const requireBoardAccess = cache(async (boardId: string) => {
+  const board = await getRepositories().boards.get(boardId);
+  if (!board) notFound();
+  return { ...(await requireWorkspaceAccess(board.workspaceId)), board };
+});
+
+export const requireColumnAccess = cache(async (columnId: string) => {
+  const column = await getRepositories().boards.getColumn(columnId);
+  if (!column) notFound();
+  return { ...(await requireBoardAccess(column.boardId)), column };
+});
+
+export const requireTaskAccess = cache(async (taskId: string) => {
+  const task = await getRepositories().tasks.get(taskId);
+  if (!task) notFound();
+  return { ...(await requireBoardAccess(task.boardId)), task };
+});
+
+export const requireLabelAccess = cache(async (labelId: string) => {
+  const label = await getRepositories().labels.get(labelId);
+  if (!label) notFound();
+  const user = await requireUser();
+  const membership = await getRepositories().memberships.get(label.teamId, user.id);
+  if (!membership) notFound();
+  return { user, membership, label };
+});
+
+export const requireInviteAccess = cache(async (inviteId: string) => {
+  const invite = await getRepositories().invites.get(inviteId);
+  if (!invite) notFound();
+  const user = await requireUser();
+  const membership = await getRepositories().memberships.get(invite.teamId, user.id);
+  if (!membership) notFound();
+  return { user, membership, invite };
+});
+```
+
+Replace `src/server/actions/shared.ts`:
+
+```ts
+import "server-only";
+import { headers } from "next/headers";
+import { z } from "zod";
+import type { CreateWorkspaceInput, Invite, UpdateTaskInput } from "@/lib/domain";
+import { invalidTaskRef } from "@/lib/domain";
+import type { ActionResult, FormState } from "@/lib/forms";
+import { invitePath } from "@/lib/paths";
+import { ForbiddenError } from "@/server/auth/permissions";
+import { ConflictError, NotFoundError, getRepositories } from "@/server/data";
+
+// Helpers for the "use server" modules in this folder (not an action module itself).
+
+export function conflictToFormState(error: unknown, values: Record<string, string>): FormState {
+  if (error instanceof ConflictError) return { fieldErrors: { [error.field]: [error.message] }, values };
+  throw error;
+}
+
+export function zodToFormState(error: z.ZodError, values: Record<string, string>): FormState {
+  return { fieldErrors: z.flattenError(error).fieldErrors, values };
+}
+
+/** Maps expected failures to a message for a toast; rethrows anything else. */
+export function toActionError(error: unknown): ActionResult {
+  if (error instanceof ConflictError || error instanceof ForbiddenError) return { ok: false, error: error.message };
+  if (error instanceof NotFoundError) return { ok: false, error: "This item no longer exists." };
+  if (error instanceof z.ZodError) return { ok: false, error: error.issues[0]?.message ?? "Invalid input" };
+  throw error;
+}
+
+/** Creates a workspace plus its default board (PRD §5.1). */
+export async function createWorkspaceWithBoard(input: CreateWorkspaceInput) {
+  const repos = getRepositories();
+  const workspace = await repos.workspaces.create(input);
+  const board = await repos.boards.create({ workspaceId: workspace.id, name: workspace.name, description: null });
+  return { workspace, board };
+}
+
+/** Rejects assignees who aren't team members and labels from other teams. */
+export async function assertTaskRefs(teamId: string, patch: Pick<UpdateTaskInput, "assignee" | "labelIds">) {
+  const repos = getRepositories();
+  const [members, labels] = await Promise.all([repos.memberships.list(teamId), repos.labels.listForTeam(teamId)]);
+  const field = invalidTaskRef(patch, {
+    memberIds: new Set(members.map((m) => m.userId)),
+    labelIds: new Set(labels.map((l) => l.id)),
+  });
+  if (field) throw new ConflictError(field, field === "assignee" ? "Pick a member of this team" : "Unknown label");
+}
+
+/** Absolute URL for a path on the current host (for links that leave the app, like invite emails). */
+export async function absoluteUrl(path: string): Promise<string> {
+  const h = await headers();
+  const host = h.get("x-forwarded-host") ?? h.get("host") ?? "localhost:3000";
+  const protocol = h.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
+  return `${protocol}://${host}${path}`;
+}
+
+/** Sends invite emails. Until Resend arrives in M5 the link is only logged; the members page can copy it. */
+export async function deliverInvites(invites: Invite[]) {
+  for (const invite of invites) {
+    console.info(`[invite] ${invite.email} (${invite.role}) → ${await absoluteUrl(invitePath(invite.token))}`);
+  }
+}
+```
+
+Replace `src/server/actions/onboarding.ts`:
+
+```ts
+"use server";
+
+import { redirect } from "next/navigation";
+import { z } from "zod";
+import {
+  createInvitesInputSchema,
+  createTeamInputSchema,
+  createWorkspaceInputSchema,
+  parseEmailList,
+} from "@/lib/domain";
+import { formValues, type FormState } from "@/lib/forms";
+import { boardPath, onboardingInvitePath, onboardingWorkspacePath, teamPath } from "@/lib/paths";
+import { requireTeamMember } from "@/server/auth/guards";
+import { assertCan } from "@/server/auth/permissions";
+import { requireUser } from "@/server/auth/session";
+import { getRepositories } from "@/server/data";
+import { conflictToFormState, createWorkspaceWithBoard, deliverInvites } from "./shared";
+
+export async function createTeamAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  const user = await requireUser();
+  const values = formValues(formData, ["name", "slug"]);
+  const parsed = createTeamInputSchema.safeParse(values);
+  if (!parsed.success) return { fieldErrors: z.flattenError(parsed.error).fieldErrors, values };
+
+  try {
+    await getRepositories().teams.create({ ...parsed.data, ownerId: user.id });
+  } catch (error) {
+    return conflictToFormState(error, values);
+  }
+  redirect(onboardingWorkspacePath(parsed.data.slug));
+}
+
+export async function createWorkspaceAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  const values = formValues(formData, ["teamSlug", "name", "keyPrefix"]);
+  const { team, membership } = await requireTeamMember(values.teamSlug);
+  assertCan(membership.role, "workspace:create");
+  const parsed = createWorkspaceInputSchema.safeParse({
+    teamId: team.id,
+    name: values.name,
+    keyPrefix: values.keyPrefix.toUpperCase(),
+  });
+  if (!parsed.success) return { fieldErrors: z.flattenError(parsed.error).fieldErrors, values };
+
+  let boardId: string;
+  try {
+    boardId = (await createWorkspaceWithBoard(parsed.data)).board.id;
+  } catch (error) {
+    return conflictToFormState(error, values);
+  }
+  redirect(onboardingInvitePath(team.slug, boardId));
+}
+
+export async function sendInvitesAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  const values = formValues(formData, ["teamSlug", "boardId", "emails"]);
+  const { user, team, membership } = await requireTeamMember(values.teamSlug);
+  assertCan(membership.role, "member:invite");
+  const parsed = createInvitesInputSchema.safeParse({
+    teamId: team.id,
+    emails: parseEmailList(values.emails),
+  });
+  // Errors on individual addresses (emails.3) flatten onto "emails".
+  if (!parsed.success) return { fieldErrors: z.flattenError(parsed.error).fieldErrors, values };
+
+  const invites = await getRepositories().invites.create({ ...parsed.data, invitedBy: user.id });
+  await deliverInvites(invites);
+  redirect(values.boardId ? boardPath(team.slug, values.boardId) : teamPath(team.slug));
+}
+```
+
+Replace `src/server/actions/auth.ts`:
+
+```ts
+"use server";
+
+import { redirect } from "next/navigation";
+import { z } from "zod";
+import { SIGN_IN_PATH, safeNextPath } from "@/lib/auth/routes";
+import { signInInputSchema, signUpInputSchema } from "@/lib/domain";
+import { formValues, type FormState } from "@/lib/forms";
+import { ONBOARDING_PATH } from "@/lib/paths";
+import { endSession, startSession } from "@/server/auth/session";
+import { ConflictError, getRepositories } from "@/server/data";
+
+export async function signUpAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  const values = formValues(formData, ["name", "email", "password", "next"]);
+  const echo = { name: values.name, email: values.email };
+  const parsed = signUpInputSchema.safeParse(values);
+  if (!parsed.success) return { fieldErrors: z.flattenError(parsed.error).fieldErrors, values: echo };
+
+  let userId: string;
+  try {
+    userId = (await getRepositories().auth.signUp(parsed.data)).id;
+  } catch (error) {
+    if (error instanceof ConflictError) return { fieldErrors: { [error.field]: [error.message] }, values: echo };
+    throw error;
+  }
+  await startSession(userId);
+  // Invitees arrive with ?next=/invite/<token>; everyone else starts onboarding.
+  const next = safeNextPath(values.next);
+  redirect(next === "/" ? ONBOARDING_PATH : next);
+}
+
+export async function signInAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  const values = formValues(formData, ["email", "password", "next"]);
+  const echo = { email: values.email };
+  const parsed = signInInputSchema.safeParse(values);
+  if (!parsed.success) return { fieldErrors: z.flattenError(parsed.error).fieldErrors, values: echo };
+
+  const user = await getRepositories().auth.signIn(parsed.data);
+  if (!user) return { formError: "Invalid email or password.", values: echo };
+  await startSession(user.id);
+  redirect(safeNextPath(values.next));
+}
+
+export async function signOutAction() {
+  await endSession();
+  redirect(SIGN_IN_PATH);
+}
+```
+
+- [ ] **Step 2: Action modules**
+
+Create `src/server/actions/members.ts`:
+
+```ts
+"use server";
+
+import { refresh, revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
+import { createInvitesInputSchema, inviteRoleSchema, parseEmailList } from "@/lib/domain";
+import { formValues, type ActionResult, type FormState } from "@/lib/forms";
+import { requireInviteAccess, requireTeamMember } from "@/server/auth/guards";
+import { assertCan, assignableRoles, canLeaveTeam, canManageMember } from "@/server/auth/permissions";
+import { getRepositories } from "@/server/data";
+import { deliverInvites, toActionError, zodToFormState } from "./shared";
+
+export async function inviteMembersAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  const values = formValues(formData, ["teamSlug", "emails", "role"]);
+  const { user, team, membership } = await requireTeamMember(values.teamSlug);
+  assertCan(membership.role, "member:invite");
+  const parsed = createInvitesInputSchema.safeParse({
+    teamId: team.id,
+    emails: parseEmailList(values.emails),
+    role: values.role || undefined,
+  });
+  if (!parsed.success) return zodToFormState(parsed.error, values);
+
+  const invites = await getRepositories().invites.create({ ...parsed.data, invitedBy: user.id });
+  await deliverInvites(invites);
+  refresh();
+  const skipped = parsed.data.emails.length - invites.length;
+  return {
+    ok: true,
+    formError: skipped > 0 ? `${skipped} already a member or already invited.` : undefined,
+  };
+}
+
+async function requireInviteManager(inviteId: string) {
+  const access = await requireInviteAccess(inviteId);
+  assertCan(access.membership.role, "member:invite");
+  return access;
+}
+
+export async function resendInviteAction(inviteId: string): Promise<ActionResult> {
+  try {
+    await requireInviteManager(inviteId);
+    await deliverInvites([await getRepositories().invites.resend(inviteId)]);
+  } catch (error) {
+    return toActionError(error);
+  }
+  refresh();
+  return { ok: true };
+}
+
+export async function revokeInviteAction(inviteId: string): Promise<ActionResult> {
+  try {
+    await requireInviteManager(inviteId);
+    await getRepositories().invites.revoke(inviteId);
+  } catch (error) {
+    return toActionError(error);
+  }
+  refresh();
+  return { ok: true };
+}
+
+const NOT_ALLOWED = "You don't have permission to change this member.";
+
+/** Loads the caller and the target member and checks the caller may manage them. */
+async function requireManageableMember(teamSlug: string, userId: string) {
+  const { team, membership } = await requireTeamMember(teamSlug);
+  const target = await getRepositories().memberships.get(team.id, userId);
+  if (!target) return { ok: false as const, error: "This person is no longer a member." };
+  if (!canManageMember(membership.role, target.role)) return { ok: false as const, error: NOT_ALLOWED };
+  return { ok: true as const, team, membership, target };
+}
+
+export async function changeRoleAction(teamSlug: string, userId: string, role: string): Promise<ActionResult> {
+  try {
+    const access = await requireManageableMember(teamSlug, userId);
+    if (!access.ok) return access;
+    const next = inviteRoleSchema.parse(role);
+    if (!assignableRoles(access.membership.role).includes(next)) return { ok: false, error: NOT_ALLOWED };
+    await getRepositories().memberships.setRole(access.team.id, userId, next);
+  } catch (error) {
+    return toActionError(error);
+  }
+  refresh();
+  return { ok: true };
+}
+
+export async function removeMemberAction(teamSlug: string, userId: string): Promise<ActionResult> {
+  try {
+    const access = await requireManageableMember(teamSlug, userId);
+    if (!access.ok) return access;
+    await getRepositories().memberships.remove(access.team.id, userId);
+  } catch (error) {
+    return toActionError(error);
+  }
+  refresh();
+  return { ok: true };
+}
+
+export async function transferOwnershipAction(teamSlug: string, userId: string): Promise<ActionResult> {
+  try {
+    const { user, team, membership } = await requireTeamMember(teamSlug);
+    assertCan(membership.role, "ownership:transfer");
+    await getRepositories().memberships.transferOwnership(team.id, user.id, userId);
+  } catch (error) {
+    return toActionError(error);
+  }
+  refresh();
+  return { ok: true };
+}
+
+export async function leaveTeamAction(teamSlug: string): Promise<ActionResult> {
+  const { user, team, membership } = await requireTeamMember(teamSlug);
+  if (!canLeaveTeam(membership.role)) {
+    return { ok: false, error: "Transfer ownership to someone else before leaving." };
+  }
+  await getRepositories().memberships.remove(team.id, user.id);
+  revalidatePath("/", "layout");
+  redirect("/");
+}
+```
+
+Create `src/server/actions/invites.ts`:
+
+```ts
+"use server";
+
+import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
+import type { FormState } from "@/lib/forms";
+import { teamPath } from "@/lib/paths";
+import { requireUser } from "@/server/auth/session";
+import { ConflictError, NotFoundError, getRepositories } from "@/server/data";
+
+export async function acceptInviteAction(token: string): Promise<FormState> {
+  const user = await requireUser();
+  const repos = getRepositories();
+  let teamId: string;
+  try {
+    teamId = (await repos.invites.accept(token, user.id)).teamId;
+  } catch (error) {
+    if (error instanceof ConflictError) return { formError: error.message };
+    if (error instanceof NotFoundError) return { formError: "This invite link is no longer valid." };
+    throw error;
+  }
+  const team = await repos.teams.get(teamId);
+  revalidatePath("/", "layout");
+  redirect(team ? teamPath(team.slug) : "/");
+}
+```
+
+Create `src/server/actions/team.ts`:
+
+```ts
+"use server";
+
+import { refresh, revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
+import { updateTeamInputSchema } from "@/lib/domain";
+import { formValues, type FormState } from "@/lib/forms";
+import { requireTeamMember } from "@/server/auth/guards";
+import { assertCan } from "@/server/auth/permissions";
+import { getRepositories } from "@/server/data";
+import { zodToFormState } from "./shared";
+
+export async function updateTeamAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  const values = formValues(formData, ["teamSlug", "name"]);
+  const { team, membership } = await requireTeamMember(values.teamSlug);
+  assertCan(membership.role, "team:update");
+  const parsed = updateTeamInputSchema.safeParse({ name: values.name });
+  if (!parsed.success) return zodToFormState(parsed.error, values);
+
+  await getRepositories().teams.update(team.id, parsed.data);
+  refresh();
+  return { ok: true };
+}
+
+export async function deleteTeamAction(teamSlug: string): Promise<void> {
+  const { team, membership } = await requireTeamMember(teamSlug);
+  assertCan(membership.role, "team:delete");
+  await getRepositories().teams.delete(team.id);
+  revalidatePath("/", "layout");
+  redirect("/");
+}
+```
+
+Create `src/server/actions/labels.ts`:
+
+```ts
+"use server";
+
+import { refresh } from "next/cache";
+import { labelInputSchema, updateLabelInputSchema, type UpdateLabelInput } from "@/lib/domain";
+import { formValues, type ActionResult, type FormState } from "@/lib/forms";
+import { requireLabelAccess, requireTeamMember } from "@/server/auth/guards";
+import { assertCan } from "@/server/auth/permissions";
+import { getRepositories } from "@/server/data";
+import { conflictToFormState, toActionError, zodToFormState } from "./shared";
+
+export async function createLabelAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  const values = formValues(formData, ["teamSlug", "name", "color"]);
+  const { team, membership } = await requireTeamMember(values.teamSlug);
+  assertCan(membership.role, "label:manage");
+  const parsed = labelInputSchema.safeParse({ name: values.name, color: values.color });
+  if (!parsed.success) return zodToFormState(parsed.error, values);
+
+  try {
+    await getRepositories().labels.create(team.id, parsed.data);
+  } catch (error) {
+    return conflictToFormState(error, values);
+  }
+  refresh();
+  return { ok: true };
+}
+
+export async function updateLabelAction(labelId: string, patch: UpdateLabelInput): Promise<ActionResult> {
+  try {
+    const { membership } = await requireLabelAccess(labelId);
+    assertCan(membership.role, "label:manage");
+    await getRepositories().labels.update(labelId, updateLabelInputSchema.parse(patch));
+  } catch (error) {
+    return toActionError(error);
+  }
+  refresh();
+  return { ok: true };
+}
+
+export async function deleteLabelAction(labelId: string): Promise<ActionResult> {
+  try {
+    const { membership } = await requireLabelAccess(labelId);
+    assertCan(membership.role, "label:manage");
+    await getRepositories().labels.delete(labelId);
+  } catch (error) {
+    return toActionError(error);
+  }
+  refresh();
+  return { ok: true };
+}
+```
+
+Create `src/server/actions/profile.ts`:
+
+```ts
+"use server";
+
+import { refresh } from "next/cache";
+import { themeSchema, updateProfileInputSchema } from "@/lib/domain";
+import { formValues, type ActionResult, type FormState } from "@/lib/forms";
+import { requireUser } from "@/server/auth/session";
+import { getRepositories } from "@/server/data";
+import { toActionError, zodToFormState } from "./shared";
+
+export async function updateProfileAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  const user = await requireUser();
+  const values = formValues(formData, ["name", "avatarUrl", "theme"]);
+  const parsed = updateProfileInputSchema.safeParse({
+    name: values.name,
+    avatarUrl: values.avatarUrl.trim() || null,
+    theme: values.theme,
+  });
+  if (!parsed.success) return zodToFormState(parsed.error, values);
+
+  await getRepositories().users.update(user.id, parsed.data);
+  refresh();
+  return { ok: true };
+}
+
+/** Persists the theme picked from the header toggle or the palette (PRD §6: per-user preference). */
+export async function setThemePreferenceAction(theme: string): Promise<ActionResult> {
+  try {
+    const user = await requireUser();
+    await getRepositories().users.update(user.id, { theme: themeSchema.parse(theme) });
+  } catch (error) {
+    return toActionError(error);
+  }
+  return { ok: true };
+}
+```
+
+- [ ] **Step 3: Verify**
+
+Run: `pnpm test && pnpm lint && pnpm typecheck && pnpm build`
+Expected: 176 tests pass; build clean.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add -A
+git commit -m "feat(actions): add member, invite, team, label and profile server actions"
+```
+
+---
+
+### Task 5: Settings UI — General, Members, Labels, Profile
+
+**Files:**
+- Create: `src/components/settings/settings-nav.tsx`, `settings-section.tsx`, `team-forms.tsx`, `members.tsx`, `labels.tsx`, `profile-form.tsx`; `src/app/[team]/settings/layout.tsx`, `page.tsx`, `members/page.tsx`, `labels/page.tsx`, `profile/page.tsx`
+- Modify: `src/components/board/board-toolbar.tsx`, `src/components/tasks/member-avatar.tsx`, `src/components/shell/nav-items.ts`, `src/app/[team]/board/[boardId]/page.tsx`
+
+**Interfaces:**
+- Produces: a **Settings** nav item (sidebar and ⌘K); settings tabs (`navigation` "Settings" → links **General**, **Members**, **Labels**, **Profile**, `aria-current` on the active one). Accessible names used by e2e: **Team name** + **Save**, **Delete team** (alertdialog button **Delete team**); member rows are `listitem`s named after the person with combobox **Role for {name}** and button **Actions for {name}** (menu **Make owner**, **Remove from team**); **Email addresses**, combobox **Role**, **Send invites**; pending invites are `listitem`s **Invite for {email}** with **Copy link** (the URL is also in `data-invite-link`), **Resend**, **Revoke**; **Leave team**; label rows are `listitem`s named after the label (list **Labels**, `aria-busy` while saving) with the name as a button, combobox **Colour for {name}**, **Delete {name}**, inputs **Label name**, **New label**, **Colour**, button **Add label**; profile **Name**, **Avatar URL**, **Theme**, **Save profile**. `MemberAvatar` renders the avatar image with initials as fallback.
+
+- [ ] **Step 1: Fix the M2 stale-filter race first** (gotcha 3 — otherwise the e2e runs below can flake)
+
+Replace `src/components/board/board-toolbar.tsx`:
+
+```tsx
+"use client";
+
+import { Plus, Search, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { LabelDot } from "@/components/tasks/label-chip";
+import type { MemberOption } from "@/components/tasks/member-avatar";
+import { PRIORITY_META, PriorityIcon } from "@/components/tasks/priority";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
+import { EMPTY_FILTERS, PRIORITIES, isFiltered, type BoardFilters, type Label } from "@/lib/domain";
+
+function toggle<T>(list: T[], item: T): T[] {
+  return list.includes(item) ? list.filter((x) => x !== item) : [...list, item];
+}
+
+function FilterTrigger({ label, count }: { label: string; count: number }) {
+  return (
+    <DropdownMenuTrigger asChild>
+      <Button variant="outline" size="sm">
+        {label}
+        {count > 0 && <Badge variant="secondary">{count}</Badge>}
+      </Button>
+    </DropdownMenuTrigger>
+  );
+}
+
+export function BoardToolbar({
+  filters,
+  onChange,
+  members,
+  labels,
+  onNewTask,
+  saving,
+}: {
+  filters: BoardFilters;
+  onChange: (filters: BoardFilters) => void;
+  members: MemberOption[];
+  labels: Label[];
+  onNewTask: () => void;
+  saving: boolean;
+}) {
+  // The URL lags behind quick successive changes (debounced search, fast clicks),
+  // so every change starts from the latest filters we asked for, not the last render.
+  const latest = useRef(filters);
+  useEffect(() => {
+    latest.current = filters;
+  }, [filters]);
+  const change = (update: (current: BoardFilters) => BoardFilters) => {
+    latest.current = update(latest.current);
+    onChange(latest.current);
+  };
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const [searchKey, setSearchKey] = useState(0);
+
+  const keepOpen = (event: Event) => event.preventDefault();
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <div className="relative">
+        <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2" />
+        <Input
+          aria-label="Search tasks"
+          placeholder="Search tasks"
+          className="h-8 w-48 pl-8"
+          key={searchKey}
+          defaultValue={filters.query}
+          onChange={(event) => {
+            const query = event.target.value.trim();
+            clearTimeout(timer.current);
+            timer.current = setTimeout(() => change((current) => ({ ...current, query })), 250);
+          }}
+        />
+      </div>
+
+      <DropdownMenu>
+        <FilterTrigger label="Assignee" count={filters.assignee === "any" ? 0 : 1} />
+        <DropdownMenuContent align="start">
+          <DropdownMenuRadioGroup
+            value={filters.assignee}
+            onValueChange={(assignee) => change((current) => ({ ...current, assignee }))}
+          >
+            <DropdownMenuRadioItem value="any">Anyone</DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="me">Me</DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="none">Unassigned</DropdownMenuRadioItem>
+            {members.map((member) => (
+              <DropdownMenuRadioItem key={member.id} value={member.id}>
+                {member.name}
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      <DropdownMenu>
+        <FilterTrigger label="Priority" count={filters.priorities.length} />
+        <DropdownMenuContent align="start">
+          {PRIORITIES.map((priority) => (
+            <DropdownMenuCheckboxItem
+              key={priority}
+              checked={filters.priorities.includes(priority)}
+              onSelect={keepOpen}
+              onCheckedChange={() =>
+                change((current) => ({ ...current, priorities: toggle(current.priorities, priority) }))
+              }
+            >
+              <PriorityIcon priority={priority} />
+              {PRIORITY_META[priority].label}
+            </DropdownMenuCheckboxItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      <DropdownMenu>
+        <FilterTrigger label="Labels" count={filters.labelIds.length} />
+        <DropdownMenuContent align="start">
+          {labels.map((label) => (
+            <DropdownMenuCheckboxItem
+              key={label.id}
+              checked={filters.labelIds.includes(label.id)}
+              onSelect={keepOpen}
+              onCheckedChange={() =>
+                change((current) => ({ ...current, labelIds: toggle(current.labelIds, label.id) }))
+              }
+            >
+              <LabelDot color={label.color} />
+              {label.name}
+            </DropdownMenuCheckboxItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      {isFiltered(filters) && (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => {
+            clearTimeout(timer.current);
+            setSearchKey((key) => key + 1);
+            change(() => EMPTY_FILTERS);
+          }}
+        >
+          <X />
+          Clear filters
+        </Button>
+      )}
+
+      <span role="status" className="text-muted-foreground ml-auto text-xs">
+        {saving ? "Saving…" : ""}
+      </span>
+      <Button size="sm" onClick={onNewTask}>
+        <Plus />
+        New task
+        <kbd className="bg-primary-foreground/20 rounded px-1 font-mono text-[10px]">C</kbd>
+      </Button>
+    </div>
+  );
+}
+```
+
+- [ ] **Step 2: Avatar, nav and board members**
+
+Replace `src/components/tasks/member-avatar.tsx`:
+
+```tsx
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { cn } from "@/lib/utils";
+
+/** Minimal member shape passed from server pages to client components. */
+export type MemberOption = { id: string; name: string; email: string; avatarUrl?: string | null };
+
+function initials(name: string) {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join("");
+}
+
+export function MemberAvatar({
+  member,
+  className,
+}: {
+  member: Pick<MemberOption, "name" | "avatarUrl">;
+  className?: string;
+}) {
+  return (
+    <Avatar title={member.name} className={cn("size-6", className)}>
+      {member.avatarUrl && <AvatarImage src={member.avatarUrl} alt="" />}
+      <AvatarFallback className="text-[10px] font-medium">{initials(member.name)}</AvatarFallback>
+    </Avatar>
+  );
+}
+```
+
+Replace `src/components/shell/nav-items.ts`:
+
+```ts
+import { Inbox, Settings, type LucideIcon } from "lucide-react";
+import { settingsPath, teamPath } from "@/lib/paths";
+
+export type NavItem = { title: string; href: string; icon: LucideIcon };
+
+// Team-level destinations, shared by the sidebar and the palette.
+export function navItems(teamSlug: string): NavItem[] {
+  return [
+    { title: "My tasks", href: teamPath(teamSlug), icon: Inbox },
+    { title: "Settings", href: settingsPath(teamSlug), icon: Settings },
+  ];
+}
+```
+
+Replace `src/app/[team]/board/[boardId]/page.tsx` (members now carry `avatarUrl`):
+
+```tsx
+import type { Metadata } from "next";
+import { notFound } from "next/navigation";
+import { BoardView } from "@/components/board/board-view";
+import { requireTeamMember } from "@/server/auth/guards";
+import { can } from "@/server/auth/permissions";
+import { getRepositories } from "@/server/data";
+
+export const metadata: Metadata = { title: "Board" };
+
+export default async function BoardPage({ params, searchParams }: PageProps<"/[team]/board/[boardId]">) {
+  const [{ team: teamSlug, boardId }, { task: taskKey }] = await Promise.all([params, searchParams]);
+  const { user, team, membership } = await requireTeamMember(teamSlug);
+  const repos = getRepositories();
+  const board = await repos.boards.get(boardId);
+  const workspace = board ? await repos.workspaces.get(board.workspaceId) : null;
+  if (!board || !workspace || workspace.teamId !== team.id) notFound();
+
+  const [columns, tasks, members, labels] = await Promise.all([
+    repos.boards.listColumns(board.id),
+    repos.tasks.listForBoard(board.id),
+    repos.memberships.listMembers(team.id),
+    repos.labels.listForTeam(team.id),
+  ]);
+  // ?task=ENG-12 opens the task sheet (PRD §5.3).
+  const openTask =
+    typeof taskKey === "string" ? (tasks.find((task) => task.key === taskKey.toUpperCase()) ?? null) : null;
+  const comments = openTask ? await repos.comments.listForTask(openTask.id) : [];
+
+  return (
+    <BoardView
+      board={board}
+      workspaceName={workspace.name}
+      columns={columns}
+      tasks={tasks}
+      members={members.map(({ user: member }) => ({
+        id: member.id,
+        name: member.name,
+        email: member.email,
+        avatarUrl: member.avatarUrl,
+      }))}
+      labels={labels}
+      comments={comments}
+      openTaskId={openTask?.id ?? null}
+      currentUserId={user.id}
+      canManage={can(membership.role, "column:manage")}
+      canModerate={can(membership.role, "comment:moderate")}
+    />
+  );
+}
+```
+
+- [ ] **Step 3: Settings components**
+
+Create `src/components/settings/settings-nav.tsx`:
+
+```tsx
+"use client";
+
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { settingsPath, type SettingsSection } from "@/lib/paths";
+import { cn } from "@/lib/utils";
+
+const SECTIONS: { section: SettingsSection; label: string }[] = [
+  { section: "general", label: "General" },
+  { section: "members", label: "Members" },
+  { section: "labels", label: "Labels" },
+  { section: "profile", label: "Profile" },
+];
+
+export function SettingsNav({ teamSlug }: { teamSlug: string }) {
+  const pathname = usePathname();
+  return (
+    <nav aria-label="Settings" className="flex gap-1 border-b">
+      {SECTIONS.map(({ section, label }) => {
+        const href = settingsPath(teamSlug, section);
+        const active = pathname === href;
+        return (
+          <Link
+            key={section}
+            href={href}
+            aria-current={active ? "page" : undefined}
+            className={cn(
+              "-mb-px border-b-2 px-3 py-2 text-sm transition-colors",
+              active
+                ? "border-primary text-foreground font-medium"
+                : "text-muted-foreground hover:text-foreground border-transparent",
+            )}
+          >
+            {label}
+          </Link>
+        );
+      })}
+    </nav>
+  );
+}
+```
+
+Create `src/components/settings/settings-section.tsx`:
+
+```tsx
+import type { ReactNode } from "react";
+
+export function SettingsSection({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="space-y-4 rounded-lg border p-5">
+      <div className="space-y-1">
+        <h2 className="font-medium">{title}</h2>
+        {description && <p className="text-muted-foreground text-sm">{description}</p>}
+      </div>
+      {children}
+    </section>
+  );
+}
+```
+
+Create `src/components/settings/team-forms.tsx`:
+
+```tsx
+"use client";
+
+import { startTransition } from "react";
+import { toast } from "sonner";
+import { TextField } from "@/components/forms/fields";
+import { useFormAction } from "@/components/forms/use-form-action";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
+import { deleteTeamAction, updateTeamAction } from "@/server/actions/team";
+
+export function TeamNameForm({ teamSlug, name }: { teamSlug: string; name: string }) {
+  const [state, action, pending] = useFormAction(updateTeamAction, () => toast.success("Team renamed"));
+  return (
+    <form action={action} className="flex max-w-md items-end gap-2">
+      <input type="hidden" name="teamSlug" value={teamSlug} />
+      <div className="flex-1">
+        <TextField
+          name="name"
+          label="Team name"
+          required
+          defaultValue={state.values?.name ?? name}
+          errors={state.fieldErrors?.name}
+        />
+      </div>
+      <Button type="submit" disabled={pending}>
+        Save
+      </Button>
+    </form>
+  );
+}
+
+export function DeleteTeamButton({ teamSlug, name }: { teamSlug: string; name: string }) {
+  return (
+    <AlertDialog>
+      <AlertDialogTrigger asChild>
+        <Button variant="destructive">Delete team</Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete {name}?</AlertDialogTitle>
+          <AlertDialogDescription>
+            Every workspace, board, task, comment, label and invite in this team is deleted, and all members lose
+            access. This can&apos;t be undone.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction variant="destructive" onClick={() => startTransition(() => deleteTeamAction(teamSlug))}>
+            Delete team
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+```
+
+Create `src/components/settings/members.tsx`:
+
+```tsx
+"use client";
+
+import { Copy, Ellipsis } from "lucide-react";
+import { useState, useTransition } from "react";
+import { toast } from "sonner";
+import { FormError, SelectField } from "@/components/forms/fields";
+import { useFormAction } from "@/components/forms/use-form-action";
+import { MemberAvatar } from "@/components/tasks/member-avatar";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import { MAX_INVITES_PER_BATCH, type InviteRole, type Role } from "@/lib/domain";
+import type { ActionResult } from "@/lib/forms";
+import {
+  changeRoleAction,
+  inviteMembersAction,
+  leaveTeamAction,
+  removeMemberAction,
+  resendInviteAction,
+  revokeInviteAction,
+  transferOwnershipAction,
+} from "@/server/actions/members";
+
+const ROLE_LABEL: Record<Role, string> = { owner: "Owner", admin: "Admin", member: "Member" };
+
+export type MemberRow = {
+  userId: string;
+  name: string;
+  email: string;
+  avatarUrl: string | null;
+  role: Role;
+  /** Whether the viewer may change this member's role or remove them. */
+  manageable: boolean;
+};
+
+function useResultAction() {
+  const [pending, startTransition] = useTransition();
+  function run(action: () => Promise<ActionResult>, success?: string) {
+    startTransition(async () => {
+      const result = await action();
+      if (!result.ok) toast.error(result.error);
+      else if (success) toast.success(success);
+    });
+  }
+  return { pending, run };
+}
+
+export function MemberList({
+  teamSlug,
+  members,
+  currentUserId,
+  assignableRoles,
+  canTransfer,
+}: {
+  teamSlug: string;
+  members: MemberRow[];
+  currentUserId: string;
+  assignableRoles: InviteRole[];
+  canTransfer: boolean;
+}) {
+  const { pending, run } = useResultAction();
+  const [confirm, setConfirm] = useState<{ kind: "remove" | "transfer"; member: MemberRow } | null>(null);
+
+  return (
+    <>
+      <ul aria-busy={pending} className="divide-y rounded-md border">
+        {members.map((member) => (
+          <li key={member.userId} aria-label={member.name} className="flex items-center gap-3 px-4 py-3 text-sm">
+            <MemberAvatar member={member} className="size-8" />
+            <div className="min-w-0 flex-1">
+              <p className="truncate font-medium">
+                {member.name}
+                {member.userId === currentUserId && (
+                  <span className="text-muted-foreground font-normal"> (you)</span>
+                )}
+              </p>
+              <p className="text-muted-foreground truncate text-xs">{member.email}</p>
+            </div>
+            {member.manageable ? (
+              <Select
+                value={member.role}
+                onValueChange={(role) =>
+                  run(() => changeRoleAction(teamSlug, member.userId, role), `${member.name} is now ${ROLE_LABEL[role as Role].toLowerCase()}`)
+                }
+              >
+                <SelectTrigger size="sm" className="w-28" aria-label={`Role for ${member.name}`}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {assignableRoles.map((role) => (
+                    <SelectItem key={role} value={role}>
+                      {ROLE_LABEL[role]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : (
+              <Badge variant="secondary">{ROLE_LABEL[member.role]}</Badge>
+            )}
+            {(member.manageable || (canTransfer && member.role !== "owner")) && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon" className="size-8" aria-label={`Actions for ${member.name}`}>
+                    <Ellipsis />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  {canTransfer && member.role !== "owner" && (
+                    <DropdownMenuItem onSelect={() => setConfirm({ kind: "transfer", member })}>
+                      Make owner
+                    </DropdownMenuItem>
+                  )}
+                  {member.manageable && (
+                    <DropdownMenuItem variant="destructive" onSelect={() => setConfirm({ kind: "remove", member })}>
+                      Remove from team
+                    </DropdownMenuItem>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+          </li>
+        ))}
+      </ul>
+
+      <AlertDialog open={confirm !== null} onOpenChange={(open) => !open && setConfirm(null)}>
+        <AlertDialogContent>
+          {confirm?.kind === "remove" && (
+            <AlertDialogHeader>
+              <AlertDialogTitle>Remove {confirm.member.name}?</AlertDialogTitle>
+              <AlertDialogDescription>
+                They lose access to this team immediately. Their tasks and comments stay.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+          )}
+          {confirm?.kind === "transfer" && (
+            <AlertDialogHeader>
+              <AlertDialogTitle>Make {confirm.member.name} the owner?</AlertDialogTitle>
+              <AlertDialogDescription>
+                A team has exactly one owner. You&apos;ll become an admin, and only the new owner can delete the team or
+                transfer it again.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+          )}
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant={confirm?.kind === "remove" ? "destructive" : "default"}
+              onClick={() => {
+                if (!confirm) return;
+                const { kind, member } = confirm;
+                if (kind === "remove") run(() => removeMemberAction(teamSlug, member.userId), `Removed ${member.name}`);
+                else run(() => transferOwnershipAction(teamSlug, member.userId), `${member.name} is now the owner`);
+              }}
+            >
+              {confirm?.kind === "remove" ? "Remove" : "Make owner"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
+}
+
+export function InviteMembersForm({ teamSlug }: { teamSlug: string }) {
+  const [state, action, pending] = useFormAction(inviteMembersAction, () => toast.success("Invites sent"));
+  const errors = state.fieldErrors?.emails;
+  return (
+    <form action={action} className="space-y-4">
+      <input type="hidden" name="teamSlug" value={teamSlug} />
+      <Field data-invalid={Boolean(errors)}>
+        <FieldLabel htmlFor="emails">Email addresses</FieldLabel>
+        <Textarea
+          id="emails"
+          name="emails"
+          rows={3}
+          placeholder="ann@example.com, bob@example.com"
+          defaultValue={state.ok ? undefined : state.values?.emails}
+          aria-invalid={Boolean(errors)}
+        />
+        <FieldDescription>
+          Separate with commas or new lines. Up to {MAX_INVITES_PER_BATCH} at a time.
+        </FieldDescription>
+        <FieldError>{errors?.[0]}</FieldError>
+      </Field>
+      <div className="flex items-end gap-2">
+        <div className="w-40">
+          <SelectField
+            name="role"
+            label="Role"
+            defaultValue={state.ok ? "member" : state.values?.role || "member"}
+            options={[
+              { value: "member", label: "Member" },
+              { value: "admin", label: "Admin" },
+            ]}
+          />
+        </div>
+        <Button type="submit" disabled={pending}>
+          Send invites
+        </Button>
+      </div>
+      <FormError message={state.formError} />
+    </form>
+  );
+}
+
+export type InviteRow = { id: string; email: string; role: InviteRole; expiresAt: string; link: string };
+
+export function PendingInvites({ invites }: { invites: InviteRow[] }) {
+  const { pending, run } = useResultAction();
+  if (invites.length === 0) return <p className="text-muted-foreground text-sm">No pending invites.</p>;
+
+  return (
+    <ul aria-busy={pending} className="divide-y rounded-md border">
+      {invites.map((invite) => (
+        <li key={invite.id} aria-label={`Invite for ${invite.email}`} className="flex items-center gap-3 px-4 py-3 text-sm">
+          <div className="min-w-0 flex-1">
+            <p className="truncate font-medium">{invite.email}</p>
+            <p className="text-muted-foreground text-xs">
+              {ROLE_LABEL[invite.role]} · expires{" "}
+              <time dateTime={invite.expiresAt} suppressHydrationWarning>
+                {new Date(invite.expiresAt).toLocaleDateString()}
+              </time>
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            data-invite-link={invite.link}
+            onClick={async () => {
+              await navigator.clipboard.writeText(invite.link);
+              toast.success("Invite link copied");
+            }}
+          >
+            <Copy />
+            Copy link
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => run(() => resendInviteAction(invite.id), "Invite resent")}>
+            Resend
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-destructive"
+            onClick={() => run(() => revokeInviteAction(invite.id), "Invite revoked")}
+          >
+            Revoke
+          </Button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+export function LeaveTeamButton({ teamSlug, teamName }: { teamSlug: string; teamName: string }) {
+  const { pending, run } = useResultAction();
+  return (
+    <AlertDialog>
+      <AlertDialogTrigger asChild>
+        <Button variant="outline" disabled={pending}>
+          Leave team
+        </Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Leave {teamName}?</AlertDialogTitle>
+          <AlertDialogDescription>You&apos;ll need a new invite to come back.</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction variant="destructive" onClick={() => run(() => leaveTeamAction(teamSlug))}>
+            Leave team
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+```
+
+Create `src/components/settings/labels.tsx`:
+
+```tsx
+"use client";
+
+import { Trash2 } from "lucide-react";
+import { useOptimistic, useState, useTransition } from "react";
+import { toast } from "sonner";
+import { SelectField, TextField } from "@/components/forms/fields";
+import { useFormAction } from "@/components/forms/use-form-action";
+import { InlineInput } from "@/components/board/inline-input";
+import { LabelDot } from "@/components/tasks/label-chip";
+import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { LABEL_COLORS, type Label, type LabelColor, type UpdateLabelInput } from "@/lib/domain";
+import type { ActionResult } from "@/lib/forms";
+import { createLabelAction, deleteLabelAction, updateLabelAction } from "@/server/actions/labels";
+
+type LabelAction = { type: "update"; id: string; patch: UpdateLabelInput } | { type: "delete"; id: string };
+
+function labelReducer(labels: Label[], action: LabelAction): Label[] {
+  return action.type === "delete"
+    ? labels.filter((l) => l.id !== action.id)
+    : labels.map((l) => (l.id === action.id ? { ...l, ...action.patch } : l));
+}
+
+const colorName = (color: LabelColor) => color[0].toUpperCase() + color.slice(1);
+
+function ColorOption({ color }: { color: LabelColor }) {
+  return (
+    <>
+      <LabelDot color={color} />
+      {colorName(color)}
+    </>
+  );
+}
+
+export function LabelList({ labels: initial, canManage }: { labels: Label[]; canManage: boolean }) {
+  const [labels, apply] = useOptimistic(initial, labelReducer);
+  const [pending, startTransition] = useTransition();
+  const [renaming, setRenaming] = useState<string | null>(null);
+
+  function mutate(action: LabelAction, run: () => Promise<ActionResult>) {
+    startTransition(async () => {
+      apply(action);
+      const result = await run();
+      if (!result.ok) toast.error(result.error);
+    });
+  }
+
+  if (labels.length === 0) return <p className="text-muted-foreground text-sm">No labels yet.</p>;
+
+  return (
+    <ul aria-label="Labels" aria-busy={pending} className="divide-y rounded-md border">
+      {labels.map((label) => (
+        <li key={label.id} aria-label={label.name} className="flex items-center gap-3 px-4 py-2.5 text-sm">
+          <LabelDot color={label.color} />
+          {renaming === label.id ? (
+            <InlineInput
+              aria-label="Label name"
+              className="h-8 max-w-60"
+              initialValue={label.name}
+              submitOnBlur
+              onSubmit={(name) => {
+                setRenaming(null);
+                if (name !== label.name) {
+                  mutate({ type: "update", id: label.id, patch: { name } }, () => updateLabelAction(label.id, { name }));
+                }
+              }}
+              onCancel={() => setRenaming(null)}
+            />
+          ) : (
+            <button
+              type="button"
+              disabled={!canManage}
+              className="font-medium enabled:hover:underline"
+              onClick={() => setRenaming(label.id)}
+            >
+              {label.name}
+            </button>
+          )}
+          {canManage && (
+            <div className="ml-auto flex items-center gap-1">
+              <Select
+                value={label.color}
+                onValueChange={(value) => {
+                  const color = value as LabelColor;
+                  mutate({ type: "update", id: label.id, patch: { color } }, () => updateLabelAction(label.id, { color }));
+                }}
+              >
+                <SelectTrigger size="sm" className="w-32" aria-label={`Colour for ${label.name}`}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {LABEL_COLORS.map((color) => (
+                    <SelectItem key={color} value={color}>
+                      <ColorOption color={color} />
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-8"
+                aria-label={`Delete ${label.name}`}
+                onClick={() => mutate({ type: "delete", id: label.id }, () => deleteLabelAction(label.id))}
+              >
+                <Trash2 />
+              </Button>
+            </div>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+export function CreateLabelForm({ teamSlug }: { teamSlug: string }) {
+  // Remount the fields after each successful create so they clear.
+  const [formKey, setFormKey] = useState(0);
+  const [state, action, pending] = useFormAction(createLabelAction, () => setFormKey((key) => key + 1));
+  return (
+    <form action={action} className="flex flex-wrap items-end gap-2">
+      <input type="hidden" name="teamSlug" value={teamSlug} />
+      <div key={formKey} className="contents">
+        <div className="w-56">
+          <TextField
+            name="name"
+            label="New label"
+            placeholder="e.g. Design"
+            required
+            defaultValue={state.ok ? undefined : state.values?.name}
+            errors={state.fieldErrors?.name}
+          />
+        </div>
+        <div className="w-36">
+          <SelectField
+            name="color"
+            label="Colour"
+            defaultValue={state.ok ? "blue" : state.values?.color || "blue"}
+            options={LABEL_COLORS.map((color) => ({ value: color, label: colorName(color) }))}
+          />
+        </div>
+      </div>
+      <Button type="submit" disabled={pending}>
+        Add label
+      </Button>
+    </form>
+  );
+}
+```
+
+Create `src/components/settings/profile-form.tsx`:
+
+```tsx
+"use client";
+
+import { useTheme } from "next-themes";
+import { toast } from "sonner";
+import { SelectField, TextField } from "@/components/forms/fields";
+import { useFormAction } from "@/components/forms/use-form-action";
+import { MemberAvatar } from "@/components/tasks/member-avatar";
+import { Button } from "@/components/ui/button";
+import { FieldGroup } from "@/components/ui/field";
+import type { Theme, User } from "@/lib/domain";
+import { updateProfileAction } from "@/server/actions/profile";
+
+export function ProfileForm({ user }: { user: Pick<User, "name" | "email" | "avatarUrl" | "theme"> }) {
+  const { setTheme } = useTheme();
+  const [state, action, pending] = useFormAction(
+    async (prev, formData) => {
+      const result = await updateProfileAction(prev, formData);
+      if (result.ok) setTheme(String(formData.get("theme")) as Theme);
+      return result;
+    },
+    () => toast.success("Profile saved"),
+  );
+
+  return (
+    <form action={action} className="max-w-md space-y-6">
+      <div className="flex items-center gap-3">
+        <MemberAvatar member={user} className="size-12 text-base" />
+        <div className="text-sm">
+          <p className="font-medium">{user.name}</p>
+          <p className="text-muted-foreground">{user.email}</p>
+        </div>
+      </div>
+      <FieldGroup>
+        <TextField
+          name="name"
+          label="Name"
+          required
+          defaultValue={state.values?.name ?? user.name}
+          errors={state.fieldErrors?.name}
+        />
+        <TextField
+          name="avatarUrl"
+          label="Avatar URL"
+          type="url"
+          placeholder="https://…"
+          description="Image uploads arrive with Supabase Storage; paste a link for now."
+          defaultValue={state.values?.avatarUrl ?? user.avatarUrl ?? ""}
+          errors={state.fieldErrors?.avatarUrl}
+        />
+        <SelectField
+          name="theme"
+          label="Theme"
+          defaultValue={state.values?.theme || user.theme || "dark"}
+          options={[
+            { value: "dark", label: "Dark" },
+            { value: "light", label: "Light" },
+            { value: "system", label: "System" },
+          ]}
+        />
+      </FieldGroup>
+      <Button type="submit" disabled={pending}>
+        Save profile
+      </Button>
+    </form>
+  );
+}
+```
+
+- [ ] **Step 4: Settings pages**
+
+Create `src/app/[team]/settings/layout.tsx`:
+
+```tsx
+import { SettingsNav } from "@/components/settings/settings-nav";
+import { requireTeamMember } from "@/server/auth/guards";
+
+export default async function SettingsLayout({ children, params }: LayoutProps<"/[team]/settings">) {
+  const { team } = await requireTeamMember((await params).team);
+  return (
+    <div className="mx-auto w-full max-w-3xl space-y-6">
+      <div className="space-y-1">
+        <h1 className="text-2xl font-semibold">Settings</h1>
+        <p className="text-muted-foreground text-sm">{team.name}</p>
+      </div>
+      <SettingsNav teamSlug={team.slug} />
+      <div className="space-y-6">{children}</div>
+    </div>
+  );
+}
+```
+
+Create `src/app/[team]/settings/page.tsx`:
+
+```tsx
+import type { Metadata } from "next";
+import { SettingsSection } from "@/components/settings/settings-section";
+import { DeleteTeamButton, TeamNameForm } from "@/components/settings/team-forms";
+import { requireTeamMember } from "@/server/auth/guards";
+import { can } from "@/server/auth/permissions";
+
+export const metadata: Metadata = { title: "Team settings" };
+
+export default async function GeneralSettingsPage({ params }: PageProps<"/[team]/settings">) {
+  const { team, membership } = await requireTeamMember((await params).team);
+
+  return (
+    <>
+      <SettingsSection title="Team" description={`Your team lives at /${team.slug}.`}>
+        {can(membership.role, "team:update") ? (
+          <TeamNameForm teamSlug={team.slug} name={team.name} />
+        ) : (
+          <p className="text-sm">{team.name}</p>
+        )}
+      </SettingsSection>
+      {can(membership.role, "team:delete") && (
+        <SettingsSection title="Danger zone" description="Deleting the team removes everything in it for everyone.">
+          <DeleteTeamButton teamSlug={team.slug} name={team.name} />
+        </SettingsSection>
+      )}
+    </>
+  );
+}
+```
+
+Create `src/app/[team]/settings/members/page.tsx`:
+
+```tsx
+import type { Metadata } from "next";
+import {
+  InviteMembersForm,
+  LeaveTeamButton,
+  MemberList,
+  PendingInvites,
+} from "@/components/settings/members";
+import { SettingsSection } from "@/components/settings/settings-section";
+import { invitePath } from "@/lib/paths";
+import { absoluteUrl } from "@/server/actions/shared";
+import { requireTeamMember } from "@/server/auth/guards";
+import { assignableRoles, can, canLeaveTeam, canManageMember } from "@/server/auth/permissions";
+import { getRepositories } from "@/server/data";
+
+export const metadata: Metadata = { title: "Members" };
+
+export default async function MembersPage({ params }: PageProps<"/[team]/settings/members">) {
+  const { user, team, membership } = await requireTeamMember((await params).team);
+  const repos = getRepositories();
+  const canInvite = can(membership.role, "member:invite");
+  const [members, invites] = await Promise.all([
+    repos.memberships.listMembers(team.id),
+    canInvite ? repos.invites.listPending(team.id) : Promise.resolve([]),
+  ]);
+  const inviteRows = await Promise.all(
+    invites.map(async (invite) => ({
+      id: invite.id,
+      email: invite.email,
+      role: invite.role,
+      expiresAt: invite.expiresAt,
+      link: await absoluteUrl(invitePath(invite.token)),
+    })),
+  );
+
+  return (
+    <>
+      <SettingsSection title="Members" description={`${members.length} ${members.length === 1 ? "person" : "people"} in ${team.name}.`}>
+        <MemberList
+          teamSlug={team.slug}
+          currentUserId={user.id}
+          assignableRoles={assignableRoles(membership.role)}
+          canTransfer={can(membership.role, "ownership:transfer")}
+          members={members.map((m) => ({
+            userId: m.userId,
+            name: m.user.name,
+            email: m.user.email,
+            avatarUrl: m.user.avatarUrl,
+            role: m.role,
+            manageable: m.userId !== user.id && canManageMember(membership.role, m.role),
+          }))}
+        />
+      </SettingsSection>
+
+      {canInvite && (
+        <>
+          <SettingsSection
+            title="Invite people"
+            description="They get a link that is valid for 7 days. Emails start sending in M5; until then, copy the link below."
+          >
+            <InviteMembersForm teamSlug={team.slug} />
+          </SettingsSection>
+          <SettingsSection title="Pending invites">
+            <PendingInvites invites={inviteRows} />
+          </SettingsSection>
+        </>
+      )}
+
+      {canLeaveTeam(membership.role) && (
+        <SettingsSection title="Leave team" description="You'll lose access to its workspaces and boards.">
+          <LeaveTeamButton teamSlug={team.slug} teamName={team.name} />
+        </SettingsSection>
+      )}
+    </>
+  );
+}
+```
+
+Create `src/app/[team]/settings/labels/page.tsx`:
+
+```tsx
+import type { Metadata } from "next";
+import { CreateLabelForm, LabelList } from "@/components/settings/labels";
+import { SettingsSection } from "@/components/settings/settings-section";
+import { requireTeamMember } from "@/server/auth/guards";
+import { can } from "@/server/auth/permissions";
+import { getRepositories } from "@/server/data";
+
+export const metadata: Metadata = { title: "Labels" };
+
+export default async function LabelsPage({ params }: PageProps<"/[team]/settings/labels">) {
+  const { team, membership } = await requireTeamMember((await params).team);
+  const labels = await getRepositories().labels.listForTeam(team.id);
+  const canManage = can(membership.role, "label:manage");
+
+  return (
+    <SettingsSection
+      title="Labels"
+      description={canManage ? "Click a name to rename it. Deleting a label removes it from every task." : "Owners and admins manage labels."}
+    >
+      <LabelList labels={labels} canManage={canManage} />
+      {canManage && <CreateLabelForm teamSlug={team.slug} />}
+    </SettingsSection>
+  );
+}
+```
+
+Create `src/app/[team]/settings/profile/page.tsx`:
+
+```tsx
+import type { Metadata } from "next";
+import { ProfileForm } from "@/components/settings/profile-form";
+import { SettingsSection } from "@/components/settings/settings-section";
+import { requireUser } from "@/server/auth/session";
+
+export const metadata: Metadata = { title: "Profile" };
+
+export default async function ProfilePage() {
+  const user = await requireUser();
+  return (
+    <SettingsSection title="Profile" description="How you appear to your teammates, in every team.">
+      <ProfileForm user={user} />
+    </SettingsSection>
+  );
+}
+```
+
+- [ ] **Step 5: Verify**
+
+Run: `rm -rf .next && pnpm test && pnpm lint && pnpm typecheck && pnpm build && pnpm test:e2e`
+Expected: 176 unit tests; build lists the four settings routes; the 20 M2 e2e tests pass.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add -A
+git commit -m "feat(settings): add team, members, labels and profile settings; fix stale board filters"
+```
+
+---
+
+### Task 6: Invite acceptance and `?next=` across auth
+
+**Files:**
+- Create: `src/app/invite/[token]/page.tsx`, `src/components/invites/accept-invite-button.tsx`
+- Modify: `src/lib/auth/routes.ts`, `src/lib/auth/routes.test.ts`, `src/components/auth/sign-in-form.tsx`, `src/components/auth/sign-up-form.tsx`, `src/app/(auth)/sign-up/page.tsx`, `src/app/sign-out/route.ts`
+
+**Interfaces:**
+- Produces: `withNext(path, next)`; sign-in ↔ sign-up links and the sign-up form keep `next`; `/sign-out?next=` (used by "Wrong account"); the invite page's states — **Invite not found**, **You're in {team}**, **This invite has expired**, **Wrong account**, **Join {team}** (button **Join {team}**).
+
+- [ ] **Step 1: Write the failing test**
+
+Replace `src/lib/auth/routes.test.ts`:
+
+```ts
+import { describe, expect, it } from "vitest";
+import { isOpenPath, isPublicPath, safeNextPath, signInRedirectPath, withNext } from "./routes";
+
+describe("isPublicPath", () => {
+  it("treats sign-in, sign-up and their sub-paths as public", () => {
+    expect(isPublicPath("/sign-in")).toBe(true);
+    expect(isPublicPath("/sign-in/magic")).toBe(true);
+    expect(isPublicPath("/sign-up")).toBe(true);
+  });
+
+  it("treats everything else as protected", () => {
+    expect(isPublicPath("/")).toBe(false);
+    expect(isPublicPath("/sign-inx")).toBe(false);
+    expect(isPublicPath("/acme/board")).toBe(false);
+  });
+});
+
+describe("isOpenPath", () => {
+  it("lets /sign-out through regardless of session", () => {
+    expect(isOpenPath("/sign-out")).toBe(true);
+    expect(isOpenPath("/sign-in")).toBe(false);
+    expect(isOpenPath("/")).toBe(false);
+  });
+});
+
+describe("signInRedirectPath", () => {
+  it("omits next for the home page", () => {
+    expect(signInRedirectPath("/", "")).toBe("/sign-in");
+  });
+
+  it("encodes the original path and query as next", () => {
+    expect(signInRedirectPath("/acme/board", "?task=ENG-1")).toBe(
+      "/sign-in?next=%2Facme%2Fboard%3Ftask%3DENG-1",
+    );
+  });
+});
+
+describe("safeNextPath", () => {
+  it("keeps same-origin relative paths", () => {
+    expect(safeNextPath("/acme/board?task=ENG-1")).toBe("/acme/board?task=ENG-1");
+  });
+
+  it.each([null, undefined, "", "https://evil.test", "//evil.test", "/\\evil.test", "acme"])(
+    "falls back to / for %s",
+    (value) => {
+      expect(safeNextPath(value)).toBe("/");
+    },
+  );
+});
+
+describe("withNext", () => {
+  it("carries a safe next path between the auth pages", () => {
+    expect(withNext("/sign-up", "/invite/abc")).toBe("/sign-up?next=%2Finvite%2Fabc");
+    expect(withNext("/sign-up", "/")).toBe("/sign-up");
+    expect(withNext("/sign-in", "https://evil.test")).toBe("/sign-in");
+  });
+});
+```
+
+Run: `pnpm test src/lib/auth`
+Expected: FAIL — `withNext` is not a function.
+
+- [ ] **Step 2: Implement**
+
+Replace `src/lib/auth/routes.ts`:
+
+```ts
+export const SESSION_COOKIE = "tracka_session";
+export const SIGN_IN_PATH = "/sign-in";
+export const SIGN_UP_PATH = "/sign-up";
+export const SIGN_OUT_PATH = "/sign-out";
+
+// Signed-in users are bounced from these to "/".
+const PUBLIC_PATHS = [SIGN_IN_PATH, SIGN_UP_PATH];
+// These skip the session check entirely (e.g. clearing a stale cookie).
+const OPEN_PATHS = [SIGN_OUT_PATH];
+
+function matches(paths: string[], pathname: string): boolean {
+  return paths.some((path) => pathname === path || pathname.startsWith(`${path}/`));
+}
+
+export function isPublicPath(pathname: string): boolean {
+  return matches(PUBLIC_PATHS, pathname);
+}
+
+export function isOpenPath(pathname: string): boolean {
+  return matches(OPEN_PATHS, pathname);
+}
+
+export function signInRedirectPath(pathname: string, search: string): string {
+  const next = `${pathname}${search}`;
+  return next === "/" ? SIGN_IN_PATH : `${SIGN_IN_PATH}?next=${encodeURIComponent(next)}`;
+}
+
+// Only allow same-origin relative paths, so ?next= can't be used as an open redirect.
+export function safeNextPath(next: string | null | undefined): string {
+  if (!next || !next.startsWith("/") || next.startsWith("//") || next.startsWith("/\\")) {
+    return "/";
+  }
+  return next;
+}
+
+/** Links between sign-in and sign-up keep the pending destination (e.g. an invite link). */
+export function withNext(path: string, next: string | null | undefined): string {
+  const safe = safeNextPath(next);
+  return safe === "/" ? path : `${path}?next=${encodeURIComponent(safe)}`;
+}
+```
+
+Replace `src/components/auth/sign-in-form.tsx`:
+
+```tsx
+"use client";
+
+import Link from "next/link";
+import { useActionState } from "react";
+import { FormError, TextField } from "@/components/forms/fields";
+import { Button } from "@/components/ui/button";
+import { FieldGroup } from "@/components/ui/field";
+import { SIGN_UP_PATH, withNext } from "@/lib/auth/routes";
+import { initialFormState } from "@/lib/forms";
+import { signInAction } from "@/server/actions/auth";
+
+export function SignInForm({ next }: { next: string }) {
+  const [state, action, pending] = useActionState(signInAction, initialFormState);
+
+  return (
+    <form action={action} className="space-y-6">
+      <input type="hidden" name="next" value={next} />
+      <FieldGroup>
+        <TextField
+          name="email"
+          label="Email"
+          type="email"
+          autoComplete="email"
+          required
+          defaultValue={state.values?.email}
+          errors={state.fieldErrors?.email}
+        />
+        <TextField
+          name="password"
+          label="Password"
+          type="password"
+          autoComplete="current-password"
+          required
+          errors={state.fieldErrors?.password}
+        />
+      </FieldGroup>
+      <FormError message={state.formError} />
+      <Button type="submit" className="w-full" disabled={pending}>
+        Sign in
+      </Button>
+      <p className="text-muted-foreground text-center text-sm">
+        No account yet?{" "}
+        <Link href={withNext(SIGN_UP_PATH, next)} className="text-foreground underline underline-offset-4">
+          Sign up
+        </Link>
+      </p>
+    </form>
+  );
+}
+```
+
+Replace `src/components/auth/sign-up-form.tsx`:
+
+```tsx
+"use client";
+
+import Link from "next/link";
+import { useActionState } from "react";
+import { TextField } from "@/components/forms/fields";
+import { Button } from "@/components/ui/button";
+import { FieldGroup } from "@/components/ui/field";
+import { SIGN_IN_PATH, withNext } from "@/lib/auth/routes";
+import { initialFormState } from "@/lib/forms";
+import { signUpAction } from "@/server/actions/auth";
+
+export function SignUpForm({ next }: { next: string }) {
+  const [state, action, pending] = useActionState(signUpAction, initialFormState);
+
+  return (
+    <form action={action} className="space-y-6">
+      <input type="hidden" name="next" value={next} />
+      <FieldGroup>
+        <TextField
+          name="name"
+          label="Name"
+          autoComplete="name"
+          required
+          defaultValue={state.values?.name}
+          errors={state.fieldErrors?.name}
+        />
+        <TextField
+          name="email"
+          label="Email"
+          type="email"
+          autoComplete="email"
+          required
+          defaultValue={state.values?.email}
+          errors={state.fieldErrors?.email}
+        />
+        <TextField
+          name="password"
+          label="Password"
+          type="password"
+          autoComplete="new-password"
+          required
+          description="At least 8 characters."
+          errors={state.fieldErrors?.password}
+        />
+      </FieldGroup>
+      <Button type="submit" className="w-full" disabled={pending}>
+        Create account
+      </Button>
+      <p className="text-muted-foreground text-center text-sm">
+        Already have an account?{" "}
+        <Link href={withNext(SIGN_IN_PATH, next)} className="text-foreground underline underline-offset-4">
+          Sign in
+        </Link>
+      </p>
+    </form>
+  );
+}
+```
+
+Replace `src/app/(auth)/sign-up/page.tsx`:
+
+```tsx
+import type { Metadata } from "next";
+import { SignUpForm } from "@/components/auth/sign-up-form";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+
+export const metadata: Metadata = { title: "Sign up" };
+
+export default async function SignUpPage({ searchParams }: PageProps<"/sign-up">) {
+  const { next } = await searchParams;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>
+          <h1 className="text-xl">Create your account</h1>
+        </CardTitle>
+        <CardDescription>Set up your team in under three minutes.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <SignUpForm next={typeof next === "string" ? next : "/"} />
+      </CardContent>
+    </Card>
+  );
+}
+```
+
+Replace `src/app/sign-out/route.ts`:
+
+```ts
+import { NextResponse, type NextRequest } from "next/server";
+import { SESSION_COOKIE, SIGN_IN_PATH, withNext } from "@/lib/auth/routes";
+
+// Clears a stale session cookie (see requireUser) or switches accounts from an
+// invite (?next=/invite/<token>). Signing out from the UI uses signOutAction.
+export function GET(request: NextRequest) {
+  const next = request.nextUrl.searchParams.get("next");
+  const response = NextResponse.redirect(new URL(withNext(SIGN_IN_PATH, next), request.url));
+  response.cookies.delete(SESSION_COOKIE);
+  return response;
+}
+```
+
+Create `src/components/invites/accept-invite-button.tsx`:
+
+```tsx
+"use client";
+
+import { useActionState } from "react";
+import { FormError } from "@/components/forms/fields";
+import { Button } from "@/components/ui/button";
+import { initialFormState } from "@/lib/forms";
+import { acceptInviteAction } from "@/server/actions/invites";
+
+export function AcceptInviteButton({ token, teamName }: { token: string; teamName: string }) {
+  const [state, action, pending] = useActionState(() => acceptInviteAction(token), initialFormState);
+  return (
+    <form action={action} className="space-y-3">
+      <Button type="submit" className="w-full" disabled={pending}>
+        Join {teamName}
+      </Button>
+      <FormError message={state.formError} />
+    </form>
+  );
+}
+```
+
+Create `src/app/invite/[token]/page.tsx`:
+
+```tsx
+import type { Metadata } from "next";
+import Link from "next/link";
+import type { ReactNode } from "react";
+import { AcceptInviteButton } from "@/components/invites/accept-invite-button";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { SIGN_OUT_PATH, withNext } from "@/lib/auth/routes";
+import { invitePath, teamPath } from "@/lib/paths";
+import { requireUser } from "@/server/auth/session";
+import { getRepositories } from "@/server/data";
+
+export const metadata: Metadata = { title: "Join a team" };
+
+function InviteCard({ title, description, children }: { title: string; description: ReactNode; children?: ReactNode }) {
+  return (
+    <main className="flex min-h-svh items-center justify-center p-6">
+      <Card className="w-full max-w-sm">
+        <CardHeader>
+          <CardTitle>
+            <h1 className="text-xl">{title}</h1>
+          </CardTitle>
+          <CardDescription>{description}</CardDescription>
+        </CardHeader>
+        {children && <CardContent>{children}</CardContent>}
+      </Card>
+    </main>
+  );
+}
+
+// Signed-out visitors never get here: proxy.ts sends them to sign-in (or sign-up) with ?next= this page.
+export default async function InvitePage({ params }: PageProps<"/invite/[token]">) {
+  const { token } = await params;
+  const user = await requireUser();
+  const repos = getRepositories();
+  const invite = await repos.invites.getByToken(token);
+  const team = invite ? await repos.teams.get(invite.teamId) : null;
+
+  if (!invite || !team) {
+    return (
+      <InviteCard title="Invite not found" description="This link is invalid or was revoked. Ask for a new invite.">
+        <Button asChild variant="outline" className="w-full">
+          <Link href="/">Go to TrackaAI</Link>
+        </Button>
+      </InviteCard>
+    );
+  }
+
+  const membership = await repos.memberships.get(team.id, user.id);
+  if (membership) {
+    return (
+      <InviteCard title={`You're in ${team.name}`} description="You're already a member of this team.">
+        <Button asChild className="w-full">
+          <Link href={teamPath(team.slug)}>Open {team.name}</Link>
+        </Button>
+      </InviteCard>
+    );
+  }
+
+  if (invite.acceptedAt || invite.expiresAt <= new Date().toISOString()) {
+    return (
+      <InviteCard
+        title="This invite has expired"
+        description={`Ask someone in ${team.name} to send you a new invite.`}
+      />
+    );
+  }
+
+  if (invite.email !== user.email) {
+    return (
+      <InviteCard
+        title="Wrong account"
+        description={
+          <>
+            This invite was sent to <strong>{invite.email}</strong>, but you&apos;re signed in as{" "}
+            <strong>{user.email}</strong>.
+          </>
+        }
+      >
+        <Button asChild variant="outline" className="w-full">
+          {/* Plain link: /sign-out is a route handler that clears the session. */}
+          <a href={withNext(SIGN_OUT_PATH, invitePath(token))}>Sign out and switch account</a>
+        </Button>
+      </InviteCard>
+    );
+  }
+
+  const inviter = await repos.users.getById(invite.invitedBy);
+  return (
+    <InviteCard
+      title={`Join ${team.name}`}
+      description={`${inviter?.name ?? "A teammate"} invited you to join as ${invite.role === "admin" ? "an admin" : "a member"}.`}
+    >
+      <AcceptInviteButton token={token} teamName={team.name} />
+    </InviteCard>
+  );
+}
+```
+
+- [ ] **Step 3: Verify**
+
+Run: `pnpm test && pnpm lint && pnpm typecheck && pnpm build`
+Expected: 177 tests pass; build lists `ƒ /invite/[token]`.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add -A
+git commit -m "feat(invites): accept invites by link and keep next across sign-in and sign-up"
+```
+
+---
+
+### Task 7: Theme preference per user + profile link
+
+**Files:**
+- Create: `src/components/theme/theme-preference-sync.tsx`
+- Modify: `src/components/theme/theme-toggle.tsx`, `src/components/theme/theme-toggle.test.tsx`, `src/components/shell/command-menu.tsx`, `src/components/shell/command-menu.test.tsx`, `src/components/shell/app-sidebar.tsx`, `src/app/[team]/layout.tsx`, `e2e/shell.spec.ts`
+
+**Interfaces:**
+- Produces: the header toggle and ⌘K theme items call `setThemePreferenceAction`; `<ThemePreferenceSync preference>` applies the saved theme (gotcha 6); the sidebar footer is a link to Profile showing the avatar, name and email.
+
+- [ ] **Step 1: Write the failing tests**
+
+Replace `src/components/theme/theme-toggle.test.tsx`:
+
+```tsx
+import { fireEvent, render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ThemeToggle } from "./theme-toggle";
+
+const mocks = vi.hoisted(() => ({
+  setTheme: vi.fn(),
+  savePreference: vi.fn(async () => ({ ok: true })),
+  resolvedTheme: "dark" as string | undefined,
+}));
+
+vi.mock("next-themes", () => ({
+  useTheme: () => ({ resolvedTheme: mocks.resolvedTheme, setTheme: mocks.setTheme }),
+}));
+vi.mock("@/server/actions/profile", () => ({ setThemePreferenceAction: mocks.savePreference }));
+
+describe("ThemeToggle", () => {
+  beforeEach(() => {
+    mocks.setTheme.mockReset();
+    mocks.savePreference.mockClear();
+  });
+
+  it("switches dark to light and saves the preference", () => {
+    mocks.resolvedTheme = "dark";
+    render(<ThemeToggle />);
+    fireEvent.click(screen.getByRole("button", { name: "Toggle theme" }));
+    expect(mocks.setTheme).toHaveBeenCalledWith("light");
+    expect(mocks.savePreference).toHaveBeenCalledWith("light");
+  });
+
+  it("switches light to dark", () => {
+    mocks.resolvedTheme = "light";
+    render(<ThemeToggle />);
+    fireEvent.click(screen.getByRole("button", { name: "Toggle theme" }));
+    expect(mocks.setTheme).toHaveBeenCalledWith("dark");
+    expect(mocks.savePreference).toHaveBeenCalledWith("dark");
+  });
+});
+```
+
+Replace `src/components/shell/command-menu.test.tsx`:
+
+```tsx
+import { fireEvent, render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { CommandMenu } from "./command-menu";
+
+const mocks = vi.hoisted(() => ({
+  push: vi.fn(),
+  setTheme: vi.fn(),
+  savePreference: vi.fn(async () => ({ ok: true })),
+}));
+
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: mocks.push }) }));
+vi.mock("next-themes", () => ({ useTheme: () => ({ setTheme: mocks.setTheme }) }));
+vi.mock("@/server/actions/profile", () => ({ setThemePreferenceAction: mocks.savePreference }));
+
+const BOARDS = [{ id: "b1", name: "Roadmap" }];
+
+describe("CommandMenu", () => {
+  beforeEach(() => {
+    mocks.push.mockReset();
+    mocks.setTheme.mockReset();
+  });
+
+  it("opens with Cmd+K", () => {
+    render(<CommandMenu teamSlug="acme" boards={BOARDS} />);
+    expect(screen.queryByPlaceholderText("Type a command or search…")).not.toBeInTheDocument();
+    fireEvent.keyDown(document, { key: "k", metaKey: true });
+    expect(screen.getByPlaceholderText("Type a command or search…")).toBeInTheDocument();
+  });
+
+  it("switches theme from the palette", () => {
+    render(<CommandMenu teamSlug="acme" boards={BOARDS} />);
+    fireEvent.keyDown(document, { key: "k", ctrlKey: true });
+    fireEvent.click(screen.getByText("Light theme"));
+    expect(mocks.setTheme).toHaveBeenCalledWith("light");
+    expect(mocks.savePreference).toHaveBeenCalledWith("light");
+  });
+
+  it("navigates to a team page", () => {
+    render(<CommandMenu teamSlug="acme" boards={BOARDS} />);
+    fireEvent.click(screen.getByRole("button", { name: /search/i }));
+    fireEvent.click(screen.getByText("My tasks"));
+    expect(mocks.push).toHaveBeenCalledWith("/acme");
+  });
+
+  it("jumps to a board", () => {
+    render(<CommandMenu teamSlug="acme" boards={BOARDS} />);
+    fireEvent.click(screen.getByRole("button", { name: /search/i }));
+    fireEvent.click(screen.getByText("Roadmap"));
+    expect(mocks.push).toHaveBeenCalledWith("/acme/board/b1");
+  });
+});
+```
+
+Run: `pnpm test src/components`
+Expected: FAIL — 3 tests (the preference isn't saved).
+
+- [ ] **Step 2: Implement**
+
+Replace `src/components/theme/theme-toggle.tsx`:
+
+```tsx
+"use client";
+
+import { Moon, Sun } from "lucide-react";
+import { useTheme } from "next-themes";
+import { Button } from "@/components/ui/button";
+import { setThemePreferenceAction } from "@/server/actions/profile";
+
+export function ThemeToggle() {
+  const { resolvedTheme, setTheme } = useTheme();
+
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      aria-label="Toggle theme"
+      onClick={() => {
+        const next = resolvedTheme === "light" ? "dark" : "light";
+        setTheme(next);
+        // Saved per user (PRD §6); failures only mean the choice doesn't follow you to other devices.
+        void setThemePreferenceAction(next);
+      }}
+    >
+      <Sun className="hidden size-4 dark:block" />
+      <Moon className="size-4 dark:hidden" />
+    </Button>
+  );
+}
+```
+
+Replace `src/components/shell/command-menu.tsx`:
+
+```tsx
+"use client";
+
+import { Moon, Search, SquareKanban, Sun } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { useTheme } from "next-themes";
+import { useEffect, useState } from "react";
+import { Button } from "@/components/ui/button";
+import {
+  Command,
+  CommandDialog,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import { boardPath } from "@/lib/paths";
+import { setThemePreferenceAction } from "@/server/actions/profile";
+import { navItems } from "./nav-items";
+
+export function CommandMenu({
+  teamSlug,
+  boards,
+}: {
+  teamSlug: string;
+  boards: { id: string; name: string }[];
+}) {
+  const [open, setOpen] = useState(false);
+  const router = useRouter();
+  const { setTheme } = useTheme();
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key.toLowerCase() === "k" && (event.metaKey || event.ctrlKey)) {
+        event.preventDefault();
+        setOpen((value) => !value);
+      }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  function run(action: () => void) {
+    setOpen(false);
+    action();
+  }
+
+  function applyTheme(theme: "dark" | "light") {
+    setTheme(theme);
+    void setThemePreferenceAction(theme);
+  }
+
+  return (
+    <>
+      <Button
+        variant="outline"
+        size="sm"
+        className="text-muted-foreground gap-2"
+        onClick={() => setOpen(true)}
+      >
+        <Search className="size-4" />
+        Search
+        <kbd className="bg-muted rounded px-1.5 font-mono text-[10px]">⌘K</kbd>
+      </Button>
+      <CommandDialog open={open} onOpenChange={setOpen}>
+        <Command>
+          <CommandInput placeholder="Type a command or search…" />
+          <CommandList>
+            <CommandEmpty>No results.</CommandEmpty>
+            <CommandGroup heading="Navigation">
+              {navItems(teamSlug).map((item) => (
+                <CommandItem key={item.href} onSelect={() => run(() => router.push(item.href))}>
+                  <item.icon />
+                  {item.title}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+            {boards.length > 0 && (
+              <CommandGroup heading="Boards">
+                {boards.map((board) => (
+                  <CommandItem
+                    key={board.id}
+                    onSelect={() => run(() => router.push(boardPath(teamSlug, board.id)))}
+                  >
+                    <SquareKanban />
+                    {board.name}
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            )}
+            <CommandGroup heading="Theme">
+              <CommandItem onSelect={() => run(() => applyTheme("dark"))}>
+                <Moon />
+                Dark theme
+              </CommandItem>
+              <CommandItem onSelect={() => run(() => applyTheme("light"))}>
+                <Sun />
+                Light theme
+              </CommandItem>
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </CommandDialog>
+    </>
+  );
+}
+```
+
+Create `src/components/theme/theme-preference-sync.tsx`:
+
+```tsx
+"use client";
+
+import { useTheme } from "next-themes";
+import { useEffect, useRef } from "react";
+import type { Theme } from "@/lib/domain";
+
+/**
+ * Applies the signed-in user's saved theme (e.g. on a new device). Runs once
+ * per saved value, so later toggles in this tab aren't overridden.
+ */
+export function ThemePreferenceSync({ preference }: { preference: Theme | undefined }) {
+  const { setTheme } = useTheme();
+  const applied = useRef<Theme | undefined>(undefined);
+
+  useEffect(() => {
+    if (!preference || applied.current === preference) return;
+    applied.current = preference;
+    setTheme(preference);
+  }, [preference, setTheme]);
+
+  return null;
+}
+```
+
+Replace `src/app/[team]/layout.tsx`:
+
+```tsx
+import { AppHeader } from "@/components/shell/app-header";
+import { AppSidebar } from "@/components/shell/app-sidebar";
+import { ThemePreferenceSync } from "@/components/theme/theme-preference-sync";
+import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+import { requireTeamMember } from "@/server/auth/guards";
+import { can } from "@/server/auth/permissions";
+import { getRepositories } from "@/server/data";
+
+export default async function TeamLayout({ children, params }: LayoutProps<"/[team]">) {
+  const { user, team, membership } = await requireTeamMember((await params).team);
+  const repos = getRepositories();
+  const [teams, workspaces] = await Promise.all([
+    repos.teams.listForUser(user.id),
+    repos.workspaces.listForTeam(team.id),
+  ]);
+  const tree = await Promise.all(
+    workspaces.map(async (workspace) => ({
+      ...workspace,
+      boards: await repos.boards.listForWorkspace(workspace.id),
+    })),
+  );
+  const boards = tree.flatMap((workspace) => workspace.boards.map(({ id, name }) => ({ id, name })));
+
+  return (
+    <SidebarProvider>
+      <ThemePreferenceSync preference={user.theme} />
+      <AppSidebar
+        user={user}
+        team={team}
+        teams={teams}
+        workspaces={tree}
+        canManage={can(membership.role, "workspace:create")}
+      />
+      {/* min-w-0 keeps wide content (the board) from pushing the header off-screen. */}
+      <SidebarInset className="min-w-0">
+        <AppHeader teamSlug={team.slug} boards={boards} />
+        <div className="flex min-h-0 flex-1 flex-col p-6">{children}</div>
+      </SidebarInset>
+    </SidebarProvider>
+  );
+}
+```
+
+Replace `src/components/shell/app-sidebar.tsx`:
+
+```tsx
+import { Layers, LogOut } from "lucide-react";
+import Link from "next/link";
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubItem,
+  SidebarRail,
+} from "@/components/ui/sidebar";
+import type { Board, Team, User, Workspace } from "@/lib/domain";
+import { boardPath, settingsPath } from "@/lib/paths";
+import { MemberAvatar } from "@/components/tasks/member-avatar";
+import { signOutAction } from "@/server/actions/auth";
+import { BoardLink } from "./board-link";
+import { navItems } from "./nav-items";
+import { TeamSwitcher } from "./team-switcher";
+import { NewWorkspaceButton, WorkspaceMenu } from "./workspace-actions";
+
+export type SidebarWorkspace = Workspace & { boards: Board[] };
+
+export function AppSidebar({
+  user,
+  team,
+  teams,
+  workspaces,
+  canManage,
+}: {
+  user: User;
+  team: Team;
+  teams: Team[];
+  workspaces: SidebarWorkspace[];
+  /** Owners and admins can create, rename and delete workspaces and boards. */
+  canManage: boolean;
+}) {
+  return (
+    <Sidebar collapsible="icon">
+      <SidebarHeader>
+        <TeamSwitcher current={team} teams={teams} />
+      </SidebarHeader>
+      <SidebarContent>
+        <SidebarGroup>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {navItems(team.slug).map((item) => (
+                <SidebarMenuItem key={item.href}>
+                  <SidebarMenuButton asChild tooltip={item.title}>
+                    <Link href={item.href}>
+                      <item.icon />
+                      <span>{item.title}</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              ))}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+        <SidebarGroup>
+          <SidebarGroupLabel>Workspaces</SidebarGroupLabel>
+          {canManage && <NewWorkspaceButton teamSlug={team.slug} />}
+          <SidebarGroupContent>
+            {workspaces.length === 0 ? (
+              <p className="text-muted-foreground px-2 text-xs group-data-[collapsible=icon]:hidden">
+                No workspaces yet
+              </p>
+            ) : (
+              <SidebarMenu>
+                {workspaces.map((workspace) => (
+                  <SidebarMenuItem key={workspace.id}>
+                    <SidebarMenuButton asChild tooltip={workspace.name}>
+                      <span>
+                        <Layers />
+                        <span>{workspace.name}</span>
+                      </span>
+                    </SidebarMenuButton>
+                    {canManage && <WorkspaceMenu workspace={workspace} />}
+                    <SidebarMenuSub>
+                      {workspace.boards.map((board) => (
+                        <SidebarMenuSubItem key={board.id}>
+                          <BoardLink href={boardPath(team.slug, board.id)} name={board.name} />
+                        </SidebarMenuSubItem>
+                      ))}
+                    </SidebarMenuSub>
+                  </SidebarMenuItem>
+                ))}
+              </SidebarMenu>
+            )}
+          </SidebarGroupContent>
+        </SidebarGroup>
+      </SidebarContent>
+      <SidebarFooter>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton asChild size="lg" tooltip="Profile">
+              <Link href={settingsPath(team.slug, "profile")}>
+                <MemberAvatar member={user} className="size-8" />
+                <span className="min-w-0 text-sm">
+                  <span className="block truncate font-medium">{user.name}</span>
+                  <span className="text-muted-foreground block truncate text-xs">{user.email}</span>
+                </span>
+              </Link>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
+        <form action={signOutAction}>
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton type="submit" tooltip="Sign out">
+                <LogOut />
+                <span>Sign out</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </form>
+      </SidebarFooter>
+      <SidebarRail />
+    </Sidebar>
+  );
+}
+```
+
+- [ ] **Step 3: Move the theme e2e test to a fresh user** (gotcha 5)
+
+Replace `e2e/shell.spec.ts`:
+
+```ts
+import { expect, test } from "@playwright/test";
+import { DEMO, fillSignIn, openFreshBoard, signInAsDemo } from "./helpers";
+
+test("signed-out visitors are sent to sign-in and back to where they were going", async ({ page }) => {
+  await page.goto("/acme?x=1");
+  await expect(page).toHaveURL(/\/sign-in\?next=%2Facme%3Fx%3D1$/);
+  await fillSignIn(page, DEMO.email, DEMO.password);
+  await expect(page).toHaveURL(/\/acme\?x=1$/);
+});
+
+test("theme is dark by default, toggles to light and follows the user to another browser", async ({
+  page,
+  browser,
+  baseURL,
+}) => {
+  const id = await openFreshBoard(page);
+  const html = page.locator("html");
+  await expect(html).toHaveClass(/\bdark\b/);
+  await Promise.all([
+    // The toggle saves the preference in the background; wait for that request.
+    page.waitForResponse((response) => response.request().method() === "POST"),
+    page.getByRole("button", { name: "Toggle theme" }).click(),
+  ]);
+  await expect(html).not.toHaveClass(/\bdark\b/);
+  await page.reload();
+  await expect(html).not.toHaveClass(/\bdark\b/);
+
+  // A new context has empty localStorage, like another device.
+  const otherDevice = await browser.newContext({ baseURL });
+  const second = await otherDevice.newPage();
+  await second.goto("/sign-in");
+  await fillSignIn(second, `user-${id}@example.test`, "password123");
+  await expect(second.getByRole("heading", { name: "My tasks" })).toBeVisible();
+  await expect(second.locator("html")).not.toHaveClass(/\bdark\b/);
+  await otherDevice.close();
+});
+
+test("command palette opens with the keyboard and jumps to a board", async ({ page }) => {
+  await signInAsDemo(page);
+  await page.keyboard.press("ControlOrMeta+k");
+  await expect(page.getByPlaceholder("Type a command or search…")).toBeVisible();
+  await page.getByRole("option", { name: "Engineering" }).click();
+  await expect(page).toHaveURL(/\/acme\/board\//);
+  await expect(page.getByRole("region", { name: "Backlog" })).toContainText("ENG-1");
+});
+
+test("sign out returns to sign-in", async ({ page }) => {
+  await signInAsDemo(page);
+  await page.getByRole("button", { name: "Sign out" }).click();
+  await expect(page).toHaveURL(/\/sign-in$/);
+});
+```
+
+Note: `e2e/shell.spec.ts` imports `openFreshBoard` from the M2 helpers; it exists already.
+
+- [ ] **Step 4: Verify**
+
+Run: `rm -rf .next && pnpm test && pnpm lint && pnpm typecheck && pnpm build && pnpm test:e2e`
+Expected: 177 unit tests; 20 e2e tests pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add -A
+git commit -m "feat(theme): save the theme per user and apply it on every device"
+```
+
+---
+
+### Task 8: Multi-user e2e, docs, review, PR
+
+**Files:**
+- Create: `e2e/team.spec.ts`
+- Modify: `e2e/helpers.ts`, `README.md`, `docs/build-plan.md` (status table)
+
+**Interfaces:**
+- Produces: helpers `openSettings(page, tab)`, `inviteTeammate(owner, role?)` → `{ email, link }`, `joinWithInvite(browser, baseURL, invite)` → a second signed-in browser context (the teammate); 8 new e2e tests.
+
+- [ ] **Step 1: Helpers and specs**
+
+Replace `e2e/helpers.ts`:
+
+```ts
+import { expect, type Browser, type Locator, type Page } from "@playwright/test";
+
+// Mirrors DEMO_USER in src/server/data/mock/seed.ts.
+export const DEMO = { email: "demo@trackaai.test", password: "demo-password" };
+
+export function uniqueId() {
+  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+}
+
+export async function fillSignIn(page: Page, email: string, password: string) {
+  await page.getByLabel("Email", { exact: true }).fill(email);
+  await page.getByLabel("Password", { exact: true }).fill(password);
+  await page.getByRole("button", { name: "Sign in" }).click();
+}
+
+export async function signInAsDemo(page: Page) {
+  await page.goto("/sign-in");
+  await fillSignIn(page, DEMO.email, DEMO.password);
+  await expect(page.getByRole("heading", { name: "My tasks" })).toBeVisible();
+}
+
+/** Signs up a fresh user and waits for onboarding step 1. Returns the unique id used. */
+export async function signUp(page: Page) {
+  const id = uniqueId();
+  await page.goto("/sign-up");
+  await page.getByLabel("Name", { exact: true }).fill(`User ${id}`);
+  await page.getByLabel("Email", { exact: true }).fill(`user-${id}@example.test`);
+  await page.getByLabel("Password", { exact: true }).fill("password123");
+  await page.getByRole("button", { name: "Create account" }).click();
+  await expect(page.getByRole("heading", { name: "Create your team" })).toBeVisible();
+  return id;
+}
+
+/** From onboarding step 1, creates a team and an "Engineering" workspace; stops at the invite step. */
+export async function createTeamAndWorkspace(page: Page, teamName: string) {
+  await page.getByLabel("Team name", { exact: true }).fill(teamName);
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page.getByRole("heading", { name: "Create your first workspace" })).toBeVisible();
+  await page.getByLabel("Workspace name", { exact: true }).fill("Engineering");
+  await expect(page.getByLabel("Key prefix", { exact: true })).toHaveValue("ENG");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page.getByRole("heading", { name: "Invite your teammates" })).toBeVisible();
+}
+
+/** Signs up a fresh user with their own team and lands on its empty "Engineering" board (keys ENG-n). */
+export async function openFreshBoard(page: Page) {
+  const id = await signUp(page);
+  await createTeamAndWorkspace(page, `Team ${id}`);
+  await page.getByRole("link", { name: "Skip for now" }).click();
+  await expect(page.getByRole("region", { name: "Backlog" })).toBeVisible();
+  return id;
+}
+
+export const column = (page: Page, name: string) => page.getByRole("region", { name, exact: true });
+
+/** Adds a task at the top of a column and waits until the server has assigned its key. */
+export async function quickAdd(page: Page, columnName: string, title: string) {
+  await page.getByRole("button", { name: `Add task to ${columnName}` }).click();
+  const input = page.getByLabel(`New task in ${columnName}`);
+  await input.fill(title);
+  await input.press("Enter");
+  await input.press("Escape");
+  await expect(column(page, columnName).getByRole("article").filter({ hasText: title })).toContainText(/ENG-\d+/);
+}
+
+/** Drags with real pointer events (dnd-kit needs movement past its 5px activation distance). */
+export async function drag(page: Page, from: Locator, to: Locator, offsetY = 60) {
+  const source = (await from.boundingBox())!;
+  const target = (await to.boundingBox())!;
+  await page.mouse.move(source.x + source.width / 2, source.y + source.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(source.x + source.width / 2 + 10, source.y + source.height / 2, { steps: 5 });
+  await page.mouse.move(target.x + target.width / 2, target.y + offsetY, { steps: 20 });
+  await page.mouse.up();
+}
+
+/** Waits until the board has no mutation in flight (it sets aria-busy while saving). */
+export async function saved(page: Page) {
+  await expect(page.locator('[data-slot="board"]')).toHaveAttribute("aria-busy", "false");
+}
+
+/** Opens a settings tab of the current team from the sidebar. */
+export async function openSettings(page: Page, tab: "General" | "Members" | "Labels" | "Profile") {
+  await page.getByRole("link", { name: "Settings", exact: true }).click();
+  await page.getByRole("navigation", { name: "Settings" }).getByRole("link", { name: tab }).click();
+  await expect(page.getByRole("link", { name: tab, exact: true })).toHaveAttribute("aria-current", "page");
+}
+
+/** Invites a fresh email from the members page; returns it with the invite link (emails arrive in M5). */
+export async function inviteTeammate(owner: Page, role: "Member" | "Admin" = "Member") {
+  await openSettings(owner, "Members");
+  const email = `mate-${uniqueId()}@example.test`;
+  await owner.getByLabel("Email addresses").fill(email);
+  if (role === "Admin") {
+    await owner.getByRole("combobox", { name: "Role" }).click();
+    await owner.getByRole("option", { name: "Admin" }).click();
+  }
+  await owner.getByRole("button", { name: "Send invites" }).click();
+  const row = owner.getByRole("listitem", { name: `Invite for ${email}` });
+  await expect(row).toBeVisible();
+  const link = await row.getByRole("button", { name: "Copy link" }).getAttribute("data-invite-link");
+  return { email, link: link! };
+}
+
+/** Opens the invite link in a new browser (signed out), signs up with the invited email and joins. */
+export async function joinWithInvite(browser: Browser, baseURL: string, invite: { email: string; link: string }) {
+  const context = await browser.newContext({ baseURL });
+  const page = await context.newPage();
+  await page.goto(invite.link);
+  await expect(page).toHaveURL(/\/sign-in\?next=%2Finvite%2F/);
+  await page.getByRole("link", { name: "Sign up" }).click();
+  await page.getByLabel("Name", { exact: true }).fill("Mate");
+  await page.getByLabel("Email", { exact: true }).fill(invite.email);
+  await page.getByLabel("Password", { exact: true }).fill("password123");
+  await page.getByRole("button", { name: "Create account" }).click();
+  await page.getByRole("button", { name: /^Join / }).click();
+  await expect(page.getByRole("heading", { name: "My tasks" })).toBeVisible();
+  return { context, page };
+}
+```
+
+Create `e2e/team.spec.ts`:
+
+```ts
+import { expect, test } from "@playwright/test";
+import {
+  column,
+  fillSignIn,
+  inviteTeammate,
+  joinWithInvite,
+  openFreshBoard,
+  openSettings,
+  quickAdd,
+  signUp,
+  uniqueId,
+} from "./helpers";
+
+test("an invited teammate joins and collaborates on the board", async ({ page, browser, baseURL }) => {
+  await openFreshBoard(page);
+  const invite = await inviteTeammate(page);
+  const { page: mate, context } = await joinWithInvite(browser, baseURL!, invite);
+
+  await mate.getByRole("link", { name: "Engineering", exact: true }).click();
+  await expect(column(mate, "Backlog")).toBeVisible();
+  // Members work on tasks but don't manage structure.
+  await expect(mate.getByRole("button", { name: "Add column" })).toHaveCount(0);
+  await expect(mate.getByRole("button", { name: "New workspace" })).toHaveCount(0);
+  await quickAdd(mate, "Todo", "From my teammate");
+
+  await page.getByRole("link", { name: "Engineering", exact: true }).click();
+  await expect(column(page, "Todo")).toContainText("From my teammate");
+  await openSettings(page, "Members");
+  await expect(page.getByRole("listitem", { name: "Mate" })).toContainText(invite.email);
+  await expect(page.getByRole("listitem", { name: `Invite for ${invite.email}` })).toHaveCount(0);
+  await context.close();
+});
+
+test("owners change roles and remove members", async ({ page, browser, baseURL }) => {
+  await openFreshBoard(page);
+  const invite = await inviteTeammate(page);
+  const { page: mate, context } = await joinWithInvite(browser, baseURL!, invite);
+
+  await page.reload();
+  await page.getByRole("combobox", { name: "Role for Mate" }).click();
+  await page.getByRole("option", { name: "Admin" }).click();
+  await expect(page.getByText("Mate is now admin")).toBeVisible();
+  await mate.reload();
+  await expect(mate.getByRole("button", { name: "New workspace" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Actions for Mate" }).click();
+  await page.getByRole("menuitem", { name: "Remove from team" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Remove" }).click();
+  // The toast only appears once the server has removed them (while the dialog is open,
+  // Radix hides the list from the accessibility tree, so the row can't be used as the signal).
+  await expect(page.getByText("Removed Mate")).toBeVisible();
+  await expect(page.getByRole("listitem", { name: "Mate" })).toHaveCount(0);
+  await mate.reload();
+  await expect(mate.getByText("This page could not be found.")).toBeVisible();
+  await context.close();
+});
+
+test("ownership can be transferred, then the old owner can leave", async ({ page, browser, baseURL }) => {
+  await openFreshBoard(page);
+  const invite = await inviteTeammate(page);
+  const { page: mate, context } = await joinWithInvite(browser, baseURL!, invite);
+
+  await page.reload();
+  await page.getByRole("button", { name: "Actions for Mate" }).click();
+  await page.getByRole("menuitem", { name: "Make owner" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Make owner" }).click();
+  await expect(page.getByText("Mate is now the owner")).toBeVisible();
+
+  await openSettings(mate, "General");
+  await expect(mate.getByRole("button", { name: "Delete team" })).toBeVisible();
+
+  await page.reload();
+  await page.getByRole("button", { name: "Leave team" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Leave team" }).click();
+  // The old owner has no other team, so they land in onboarding.
+  await expect(page.getByRole("heading", { name: "Create your team" })).toBeVisible();
+  await context.close();
+});
+
+test("invite links: revoked, resent and opened with the wrong account", async ({ page, browser, baseURL }) => {
+  await openFreshBoard(page);
+  const revoked = await inviteTeammate(page);
+  await page
+    .getByRole("listitem", { name: `Invite for ${revoked.email}` })
+    .getByRole("button", { name: "Revoke" })
+    .click();
+  await expect(page.getByRole("listitem", { name: `Invite for ${revoked.email}` })).toHaveCount(0);
+
+  const invite = await inviteTeammate(page);
+  const row = page.getByRole("listitem", { name: `Invite for ${invite.email}` });
+  await row.getByRole("button", { name: "Resend" }).click();
+  await expect(row.getByRole("button", { name: "Copy link" })).not.toHaveAttribute("data-invite-link", invite.link);
+  const fresh = (await row.getByRole("button", { name: "Copy link" }).getAttribute("data-invite-link"))!;
+
+  // Someone else, already signed in, opens the links.
+  const context = await browser.newContext({ baseURL });
+  const other = await context.newPage();
+  await signUp(other);
+  await other.goto(revoked.link);
+  await expect(other.getByRole("heading", { name: "Invite not found" })).toBeVisible();
+  await other.goto(invite.link);
+  await expect(other.getByRole("heading", { name: "Invite not found" })).toBeVisible();
+  await other.goto(fresh);
+  await expect(other.getByRole("heading", { name: "Wrong account" })).toBeVisible();
+  await context.close();
+});
+
+test("labels are managed in settings", async ({ page }) => {
+  await openFreshBoard(page);
+  await openSettings(page, "Labels");
+  await page.getByLabel("New label").fill("Design");
+  await page.getByRole("button", { name: "Add label" }).click();
+  await expect(page.getByRole("listitem", { name: "Design" })).toBeVisible();
+  await expect(page.getByLabel("New label")).toHaveValue("");
+
+  await page.getByRole("listitem", { name: "Design" }).getByRole("button", { name: "Design", exact: true }).click();
+  await page.getByLabel("Label name").fill("UX");
+  await page.getByLabel("Label name").press("Enter");
+  await expect(page.getByRole("listitem", { name: "UX" })).toBeVisible();
+
+  await page.getByRole("combobox", { name: "Colour for UX" }).click();
+  await page.getByRole("option", { name: "Pink" }).click();
+  await page.getByRole("button", { name: "Delete Bug" }).click();
+  await expect(page.getByRole("listitem", { name: "Bug" })).toHaveCount(0);
+  // Edits are optimistic; wait until the list has finished saving before reloading.
+  await expect(page.getByRole("list", { name: "Labels" })).toHaveAttribute("aria-busy", "false");
+
+  await page.reload();
+  await expect(page.getByRole("combobox", { name: "Colour for UX" })).toHaveText(/Pink/);
+  await expect(page.getByRole("listitem", { name: "Bug" })).toHaveCount(0);
+});
+
+test("profile changes show across the app", async ({ page }) => {
+  await openFreshBoard(page);
+  await openSettings(page, "Profile");
+  const name = `Grace ${uniqueId()}`;
+  await page.getByLabel("Name", { exact: true }).fill(name);
+  await page.getByRole("button", { name: "Save profile" }).click();
+  await expect(page.getByText("Profile saved")).toBeVisible();
+  await expect(page.getByRole("link", { name: new RegExp(name) })).toBeVisible(); // sidebar footer
+
+  // type="url": the browser refuses to submit an invalid avatar URL.
+  const avatar = page.getByLabel("Avatar URL");
+  await avatar.fill("not a url");
+  await page.getByRole("button", { name: "Save profile" }).click();
+  expect(await avatar.evaluate((input: HTMLInputElement) => input.checkValidity())).toBe(false);
+});
+
+test("teams can be renamed and deleted", async ({ page }) => {
+  const id = await openFreshBoard(page);
+  await openSettings(page, "General");
+  await page.getByLabel("Team name").fill(`Renamed ${id}`);
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByRole("button", { name: `Switch team (current: Renamed ${id})` })).toBeVisible();
+
+  await page.getByRole("button", { name: "Delete team" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Delete team" }).click();
+  await expect(page.getByRole("heading", { name: "Create your team" })).toBeVisible();
+});
+
+test("signing up from an invite keeps the invite through sign-in and sign-up", async ({ page }) => {
+  await page.goto("/invite/some-token");
+  await expect(page).toHaveURL(/\/sign-in\?next=%2Finvite%2Fsome-token$/);
+  await page.getByRole("link", { name: "Sign up" }).click();
+  await expect(page).toHaveURL(/\/sign-up\?next=%2Finvite%2Fsome-token$/);
+  await page.getByRole("link", { name: "Sign in" }).click();
+  await expect(page).toHaveURL(/\/sign-in\?next=%2Finvite%2Fsome-token$/);
+  await fillSignIn(page, "demo@trackaai.test", "demo-password");
+  await expect(page.getByRole("heading", { name: "Invite not found" })).toBeVisible();
+});
+```
+
+- [ ] **Step 2: Run**
+
+Run: `pnpm test:e2e`, then `CI=1 pnpm test:e2e --retries=0` three times.
+Expected: `28 passed` every time (the dry run was 28/28 on six consecutive runs after these fixes).
+
+- [ ] **Step 3: Docs** — in `README.md` under **Develop**, add: "Invite emails arrive in M5; until then the members page shows each invite's link, and the dev server logs it." In this file's status table mark M3 `✅ Done` and M4 `Planned when M3 is merged`.
+
+- [ ] **Step 4: Full verification**
+
+Run: `pnpm lint && pnpm typecheck && pnpm test && pnpm test:e2e`
+Expected: 177 unit + 28 e2e green.
+
+- [ ] **Step 5: Commit, review, PR**
+
+```bash
+git add -A
+git commit -m "test(e2e): cover invites, roles, ownership, labels, profile and team settings"
+```
+Run the `pre-pr-reviewer` subagent on the branch and fix its findings (each fix as its own commit, re-running the checks). Then:
+
+```bash
+git push -u origin m3-team-management
+gh pr create --base main --title "M3: team & user management" --body "..."
+```
+Queue auto-merge (merge commit) so the PR lands when CI passes.
+
+---
+
+## Pre-PR review (applied after Task 8)
+
+The `pre-pr-reviewer` subagent found no authorization gaps. Its verified findings were fixed as separate commits:
+- **Open redirect:** `safeNextPath` accepted `"/\t/evil.test"` (browsers strip tab/CR/LF → `//evil.test`). It now resolves `next` against a dummy origin and requires the origin to be unchanged; tests cover `\t`, `\n`, `\r`.
+- **Host-header poisoning:** invite links came from `Host`/`X-Forwarded-Host`. `resolveAppOrigin` (`src/lib/app-url.ts`, tested) uses `APP_URL` and refuses the header fallback in production; `APP_URL` is in `.env.example` and the Playwright web server.
+- Label deletion now asks for confirmation; used invites say "already used" instead of "expired"; avatar URLs must be http(s).
+
+Deferred nits: `assertCan` in two form actions throws instead of returning a form error (UI hides those controls); `acceptInviteAction` doesn't Zod-validate the token (unknown tokens already 404).
+
+## M3 Definition of Done
+
+- A second user is invited (link copied from the members page), signs up through the link, joins with the invited role and collaborates on the board — covered by e2e with two browser contexts.
+- Roles change, members are removed, ownership transfers, and non-owners can leave; every rule lives in `permissions.ts` and is unit-tested.
+- Pending invites can be copied, resent (old link dies) and revoked; wrong-account and expired links explain themselves.
+- Labels, the team name and the profile (name, avatar URL, theme) are editable; the theme follows the user across devices.
+- 183 unit tests (177 from the plan + 6 from the review fixes) + 28 e2e tests green locally and in CI.
+
+## Next up: M4
+
+Planned here once M3 is merged: local Supabase (OrbStack + `supabase init/start`), schema migrations for every entity with RLS scoped by team membership, Supabase Auth replacing mock auth in `proxy.ts` via `@supabase/ssr`, Supabase repository implementations behind the same interfaces (`DATA_BACKEND=supabase`), generated types, board Realtime, and RLS tests proving cross-team isolation.

@@ -1,5 +1,6 @@
 import { AppHeader } from "@/components/shell/app-header";
 import { AppSidebar } from "@/components/shell/app-sidebar";
+import { ThemePreferenceSync } from "@/components/theme/theme-preference-sync";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { requireTeamMember } from "@/server/auth/guards";
 import { can } from "@/server/auth/permissions";
@@ -22,6 +23,7 @@ export default async function TeamLayout({ children, params }: LayoutProps<"/[te
 
   return (
     <SidebarProvider>
+      <ThemePreferenceSync preference={user.theme} />
       <AppSidebar
         user={user}
         team={team}

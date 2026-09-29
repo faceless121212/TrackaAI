@@ -32,7 +32,12 @@ export default async function BoardPage({ params, searchParams }: PageProps<"/[t
       workspaceName={workspace.name}
       columns={columns}
       tasks={tasks}
-      members={members.map(({ user: member }) => ({ id: member.id, name: member.name, email: member.email }))}
+      members={members.map(({ user: member }) => ({
+        id: member.id,
+        name: member.name,
+        email: member.email,
+        avatarUrl: member.avatarUrl,
+      }))}
       labels={labels}
       comments={comments}
       openTaskId={openTask?.id ?? null}

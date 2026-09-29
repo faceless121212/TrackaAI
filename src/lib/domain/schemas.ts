@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { LABEL_COLORS, MAX_INVITES_PER_BATCH, RESERVED_SLUGS } from "./constants";
+import { LABEL_COLORS, MAX_INVITES_PER_BATCH, RESERVED_SLUGS, THEMES } from "./constants";
 
 export const ROLES = ["owner", "admin", "member"] as const;
 export const PRIORITIES = ["none", "low", "medium", "high", "urgent"] as const;
@@ -7,6 +7,8 @@ export const PLANS = ["lite", "pro"] as const;
 
 export const idSchema = z.string().min(1);
 export const roleSchema = z.enum(ROLES);
+export const inviteRoleSchema = roleSchema.exclude(["owner"]);
+export const themeSchema = z.enum(THEMES);
 export const prioritySchema = z.enum(PRIORITIES);
 export const planSchema = z.enum(PLANS);
 
@@ -31,7 +33,10 @@ export const userSchema = z.object({
   id: idSchema,
   email: z.email(),
   name: z.string().trim().min(1).max(80),
-  avatarUrl: z.url().nullable(),
+  // http(s) only: javascript:/data: URLs would be unsafe anywhere this ends up as a link or in an email.
+  avatarUrl: z.url({ protocol: /^https?$/, error: "Enter a full URL, like https://…" }).nullable(),
+  /** Absent for users created before M3; the app then uses the dark default. */
+  theme: themeSchema.optional(),
   createdAt: timestampSchema,
 });
 
@@ -126,7 +131,7 @@ export const inviteSchema = z.object({
   id: idSchema,
   teamId: idSchema,
   email: z.email(),
-  role: roleSchema.exclude(["owner"]),
+  role: inviteRoleSchema,
   token: z.string().min(16),
   invitedBy: idSchema,
   expiresAt: timestampSchema,
@@ -151,6 +156,7 @@ export const createInvitesInputSchema = z.object({
     .array(emailSchema)
     .min(1, "Add at least one email")
     .max(MAX_INVITES_PER_BATCH, `Invite at most ${MAX_INVITES_PER_BATCH} people at a time`),
+  role: inviteRoleSchema.default("member"),
 });
 
 export const createTeamInputSchema = teamSchema.pick({ name: true, slug: true });
@@ -176,6 +182,17 @@ export const createTaskInputSchema = z.object({
   dueDate: taskSchema.shape.dueDate.default(null),
   parentId: taskSchema.shape.parentId.default(null),
 });
+
+export const updateTeamInputSchema = teamSchema.pick({ name: true });
+
+export const updateProfileInputSchema = z.object({
+  name: userSchema.shape.name,
+  avatarUrl: userSchema.shape.avatarUrl,
+  theme: themeSchema,
+});
+
+export const labelInputSchema = labelSchema.pick({ name: true, color: true });
+export const updateLabelInputSchema = labelInputSchema.partial();
 
 export const updateWorkspaceInputSchema = workspaceSchema.pick({ name: true });
 
@@ -209,6 +226,12 @@ export type Board = z.infer<typeof boardSchema>;
 export type Column = z.infer<typeof columnSchema>;
 export type Assignee = z.infer<typeof assigneeSchema>;
 export type Task = z.infer<typeof taskSchema>;
+export type Theme = z.infer<typeof themeSchema>;
+export type InviteRole = z.infer<typeof inviteRoleSchema>;
+export type UpdateTeamInput = z.infer<typeof updateTeamInputSchema>;
+export type UpdateProfileInput = z.infer<typeof updateProfileInputSchema>;
+export type LabelInput = z.infer<typeof labelInputSchema>;
+export type UpdateLabelInput = z.infer<typeof updateLabelInputSchema>;
 export type LabelColor = z.infer<typeof labelColorSchema>;
 export type Label = z.infer<typeof labelSchema>;
 export type CommentAuthor = z.infer<typeof commentAuthorSchema>;

@@ -5,10 +5,14 @@ import {
   createInvitesInputSchema,
   createTaskInputSchema,
   keyPrefixSchema,
+  labelInputSchema,
   labelSchema,
   signUpInputSchema,
   slugSchema,
+  updateLabelInputSchema,
+  updateProfileInputSchema,
   updateTaskInputSchema,
+  updateTeamInputSchema,
 } from "./schemas";
 
 describe("keyPrefixSchema", () => {
@@ -117,5 +121,36 @@ describe("labels and comments", () => {
   it("trims comment bodies and rejects blank ones", () => {
     expect(createCommentInputSchema.parse({ taskId: "t", body: "  hi  " })).toEqual({ taskId: "t", body: "hi" });
     expect(createCommentInputSchema.safeParse({ taskId: "t", body: "   " }).success).toBe(false);
+  });
+});
+
+describe("profile, team and label inputs", () => {
+  it("accepts a profile with an optional avatar URL and a theme", () => {
+    expect(updateProfileInputSchema.parse({ name: " Ada ", avatarUrl: null, theme: "light" })).toEqual({
+      name: "Ada",
+      avatarUrl: null,
+      theme: "light",
+    });
+    expect(updateProfileInputSchema.safeParse({ name: "Ada", avatarUrl: "not a url", theme: "dark" }).success).toBe(false);
+    for (const avatarUrl of ["javascript:alert(1)", "data:image/svg+xml,x", "ftp://a.test/x.png"]) {
+      expect(updateProfileInputSchema.safeParse({ name: "Ada", avatarUrl, theme: "dark" }).success).toBe(false);
+    }
+    expect(updateProfileInputSchema.safeParse({ name: "Ada", avatarUrl: null, theme: "sepia" }).success).toBe(false);
+  });
+
+  it("validates label names and colours", () => {
+    expect(labelInputSchema.parse({ name: " Ops ", color: "green" })).toEqual({ name: "Ops", color: "green" });
+    expect(labelInputSchema.safeParse({ name: "", color: "green" }).success).toBe(false);
+    expect(updateLabelInputSchema.parse({ color: "pink" })).toEqual({ color: "pink" });
+  });
+
+  it("renames teams", () => {
+    expect(updateTeamInputSchema.parse({ name: " Acme 2 " })).toEqual({ name: "Acme 2" });
+  });
+
+  it("defaults invites to the member role and never invites owners", () => {
+    expect(createInvitesInputSchema.parse({ teamId: "t", emails: ["a@b.test"] }).role).toBe("member");
+    expect(createInvitesInputSchema.parse({ teamId: "t", emails: ["a@b.test"], role: "admin" }).role).toBe("admin");
+    expect(createInvitesInputSchema.safeParse({ teamId: "t", emails: ["a@b.test"], role: "owner" }).success).toBe(false);
   });
 });

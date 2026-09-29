@@ -48,12 +48,16 @@ export function BoardToolbar({
   onNewTask: () => void;
   saving: boolean;
 }) {
-  // Search is uncontrolled and debounced into the URL; the timer reads the
-  // latest filters so a filter changed meanwhile isn't reverted.
+  // The URL lags behind quick successive changes (debounced search, fast clicks),
+  // so every change starts from the latest filters we asked for, not the last render.
   const latest = useRef(filters);
   useEffect(() => {
     latest.current = filters;
-  });
+  }, [filters]);
+  const change = (update: (current: BoardFilters) => BoardFilters) => {
+    latest.current = update(latest.current);
+    onChange(latest.current);
+  };
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const [searchKey, setSearchKey] = useState(0);
 
@@ -72,7 +76,7 @@ export function BoardToolbar({
           onChange={(event) => {
             const query = event.target.value.trim();
             clearTimeout(timer.current);
-            timer.current = setTimeout(() => onChange({ ...latest.current, query }), 250);
+            timer.current = setTimeout(() => change((current) => ({ ...current, query })), 250);
           }}
         />
       </div>
@@ -82,7 +86,7 @@ export function BoardToolbar({
         <DropdownMenuContent align="start">
           <DropdownMenuRadioGroup
             value={filters.assignee}
-            onValueChange={(assignee) => onChange({ ...filters, assignee })}
+            onValueChange={(assignee) => change((current) => ({ ...current, assignee }))}
           >
             <DropdownMenuRadioItem value="any">Anyone</DropdownMenuRadioItem>
             <DropdownMenuRadioItem value="me">Me</DropdownMenuRadioItem>
@@ -104,7 +108,9 @@ export function BoardToolbar({
               key={priority}
               checked={filters.priorities.includes(priority)}
               onSelect={keepOpen}
-              onCheckedChange={() => onChange({ ...filters, priorities: toggle(filters.priorities, priority) })}
+              onCheckedChange={() =>
+                change((current) => ({ ...current, priorities: toggle(current.priorities, priority) }))
+              }
             >
               <PriorityIcon priority={priority} />
               {PRIORITY_META[priority].label}
@@ -121,7 +127,9 @@ export function BoardToolbar({
               key={label.id}
               checked={filters.labelIds.includes(label.id)}
               onSelect={keepOpen}
-              onCheckedChange={() => onChange({ ...filters, labelIds: toggle(filters.labelIds, label.id) })}
+              onCheckedChange={() =>
+                change((current) => ({ ...current, labelIds: toggle(current.labelIds, label.id) }))
+              }
             >
               <LabelDot color={label.color} />
               {label.name}
@@ -137,7 +145,7 @@ export function BoardToolbar({
           onClick={() => {
             clearTimeout(timer.current);
             setSearchKey((key) => key + 1);
-            onChange(EMPTY_FILTERS);
+            change(() => EMPTY_FILTERS);
           }}
         >
           <X />

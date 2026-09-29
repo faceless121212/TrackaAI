@@ -2,10 +2,15 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CommandMenu } from "./command-menu";
 
-const mocks = vi.hoisted(() => ({ push: vi.fn(), setTheme: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  push: vi.fn(),
+  setTheme: vi.fn(),
+  savePreference: vi.fn(async () => ({ ok: true })),
+}));
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: mocks.push }) }));
 vi.mock("next-themes", () => ({ useTheme: () => ({ setTheme: mocks.setTheme }) }));
+vi.mock("@/server/actions/profile", () => ({ setThemePreferenceAction: mocks.savePreference }));
 
 const BOARDS = [{ id: "b1", name: "Roadmap" }];
 
@@ -27,6 +32,7 @@ describe("CommandMenu", () => {
     fireEvent.keyDown(document, { key: "k", ctrlKey: true });
     fireEvent.click(screen.getByText("Light theme"));
     expect(mocks.setTheme).toHaveBeenCalledWith("light");
+    expect(mocks.savePreference).toHaveBeenCalledWith("light");
   });
 
   it("navigates to a team page", () => {

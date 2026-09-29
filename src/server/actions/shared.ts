@@ -1,8 +1,11 @@
 import "server-only";
+import { headers } from "next/headers";
 import { z } from "zod";
-import type { CreateWorkspaceInput, UpdateTaskInput } from "@/lib/domain";
+import type { CreateWorkspaceInput, Invite, UpdateTaskInput } from "@/lib/domain";
 import { invalidTaskRef } from "@/lib/domain";
+import { resolveAppOrigin } from "@/lib/app-url";
 import type { ActionResult, FormState } from "@/lib/forms";
+import { invitePath } from "@/lib/paths";
 import { ForbiddenError } from "@/server/auth/permissions";
 import { ConflictError, NotFoundError, getRepositories } from "@/server/data";
 
@@ -42,4 +45,23 @@ export async function assertTaskRefs(teamId: string, patch: Pick<UpdateTaskInput
     labelIds: new Set(labels.map((l) => l.id)),
   });
   if (field) throw new ConflictError(field, field === "assignee" ? "Pick a member of this team" : "Unknown label");
+}
+
+/** Absolute URL for a path, for links that leave the app (invite links, emails). */
+export async function absoluteUrl(path: string): Promise<string> {
+  const h = await headers();
+  const origin = resolveAppOrigin({
+    appUrl: process.env.APP_URL,
+    host: h.get("x-forwarded-host") ?? h.get("host"),
+    proto: h.get("x-forwarded-proto"),
+    production: process.env.NODE_ENV === "production",
+  });
+  return `${origin}${path}`;
+}
+
+/** Sends invite emails. Until Resend arrives in M5 the link is only logged; the members page can copy it. */
+export async function deliverInvites(invites: Invite[]) {
+  for (const invite of invites) {
+    console.info(`[invite] ${invite.email} (${invite.role}) → ${await absoluteUrl(invitePath(invite.token))}`);
+  }
 }

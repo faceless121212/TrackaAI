@@ -13,6 +13,11 @@ pnpm install
 pnpm dev
 ```
 
-The mock backend seeds `.data/mock-db.json` on first run with `demo@trackaai.test` / `demo-password`; delete the file to reset. Mock data from before M2 has no labels; delete `.data/` to reseed. Invite emails arrive in M5; until then the members page shows each invite's link, and the dev server logs it.
+### Data backends
 
-Checks: `pnpm lint && pnpm typecheck && pnpm test && pnpm test:e2e`
+- **Mock** (`DATA_BACKEND=mock`, default): a JSON file at `.data/mock-db.json`, seeded on first run with `demo@trackaai.test` / `demo-password`; delete `.data/` to reset. CI and the e2e suite use this.
+- **Supabase** (`DATA_BACKEND=supabase`): a hosted project. Set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` (public values; no secret key needed). Apply `supabase/migrations/*` in order, then `supabase/seed.sql`, which creates the pre-confirmed `demo@trackaai.test` and `mate@trackaai.test` accounts (password `demo-password`) and the demo board. Sign-up requires confirming the email (Supabase "Confirm email" is on).
+
+Invites are shared with the members page's **Copy link** button (email sending was skipped).
+
+Checks: `pnpm lint && pnpm typecheck && pnpm test && pnpm test:e2e`. Against the live Supabase project: `pnpm test:supabase`.

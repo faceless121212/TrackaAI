@@ -12,9 +12,9 @@ This file holds the detailed, task-level plan for the **current** milestone. Eac
 | M1 — Mock data layer + onboarding | ✅ Done |
 | M2 — Workspaces, boards & Kanban | ✅ Done |
 | M3 — Team & user management | ✅ Done |
-| M4 — Supabase (local, Docker) | Planned when M3 is merged |
-| M5 — Emails (Resend) | — |
-| M6 — Billing (Stripe) | — |
+| M4 — Supabase (hosted, no Docker) | ✅ Done |
+| M5 — Emails (Resend) | ⏭️ Skipped (decision) |
+| M6 — Billing (Stripe) | Planned when M4 is merged |
 | M7 — AI I: task writer & breakdown | — |
 | M8 — AI II: board copilot | — |
 | M9 — AI III: AI teammate | — |
@@ -15306,6 +15306,53 @@ Deferred nits: `assertCan` in two form actions throws instead of returning a for
 - Labels, the team name and the profile (name, avatar URL, theme) are editable; the theme follows the user across devices.
 - 183 unit tests (177 from the plan + 6 from the review fixes) + 28 e2e tests green locally and in CI.
 
-## Next up: M4
+---
 
-Planned here once M3 is merged: local Supabase (OrbStack + `supabase init/start`), schema migrations for every entity with RLS scoped by team membership, Supabase Auth replacing mock auth in `proxy.ts` via `@supabase/ssr`, Supabase repository implementations behind the same interfaces (`DATA_BACKEND=supabase`), generated types, board Realtime, and RLS tests proving cross-team isolation.
+# M4 — Supabase (hosted) — Build record
+
+Unlike M0–M3, M4 was built iteratively against the live project rather than from a pre-written plan, because two scope decisions arrived mid-way: **no Docker** (use a hosted Supabase project through the Supabase MCP connector) and **keep "Confirm email" on**. This section records what shipped, the decisions, and what was learned. The code is in the M4 PR.
+
+## What shipped
+
+| Area | Files |
+|---|---|
+| Schema, RLS, SQL functions | `supabase/migrations/20260929120000_initial_schema.sql`, `…163000_harden_grants_and_policies.sql`, `…164500_private_rls_helpers.sql` |
+| Seed (dev accounts + demo board) | `supabase/seed.sql` |
+| Schema/RLS tests (PGlite, no network) | `src/server/data/supabase/{pglite-harness,schema.test}.ts` |
+| Supabase repositories + types | `src/server/data/supabase/{repositories,database.types,server-client,proxy-session}.ts`, `src/lib/supabase/{config,browser-client}.ts` |
+| Live integration tests | `src/server/data/supabase/repositories.integration.test.ts` (`pnpm test:supabase`) |
+| Sessions behind the contract | `AuthRepo.{signOut,currentUserId,confirmEmail}`; mock `SessionStore` (`src/server/data/mock/session.ts`, `src/server/auth/cookie-session.ts`) |
+| Email confirmation | `src/app/auth/callback/route.ts`, `src/app/(auth)/sign-up/check-email/page.tsx`, sign-in `?confirm=failed` |
+| Realtime | `src/components/board/use-board-realtime.ts` |
+
+Contract changes: `auth.signUp` → `{ user, needsConfirmation }`; `invites.preview(token)` (an invitee can't read the team's tables before joining).
+
+## Decisions
+
+- **Hosted project, no Docker.** Migrations, SQL, advisors and type generation go through the Supabase MCP connector; the repo keeps the migration files as the source of truth.
+- **Schema tests without a database server:** PGlite runs the real migrations with a small stub of the Supabase platform (roles, `auth.users`, `auth.uid()`), so RLS is tested in the normal unit suite and in CI.
+- **No secret key anywhere.** The app uses the publishable key plus the user's session; integration tests sign in as seeded accounts.
+- **"Confirm email" on.** Sign-up shows "Check your inbox"; the link lands on `/auth/callback` (PKCE `code` or `token_hash`); a `/?code=` fallback is forwarded when the redirect isn't allow-listed.
+- **CI stays on the mock backend**; the live project is covered by `pnpm test:supabase` and a scripted end-to-end run (sign-in, board, quick-add, drag, realtime across two windows).
+
+## Verified gotchas
+
+1. Supabase's advisors flagged every `SECURITY DEFINER` helper as callable through `/rest/v1/rpc`, even by signed-out visitors → revoke from `anon`, then move the RLS helpers into a `private` schema (policies reference functions by OID, so they keep working; function bodies reference them by name and were rewritten). Only the five intended RPCs remain callable by signed-in users.
+2. `auth.uid()` in a policy runs per row → wrap as `(select auth.uid())` (advisor `auth_rls_initplan`).
+3. Fractional-index positions must sort by code unit → `position text collate "C"`.
+4. Deleting a board must remove its columns and tasks together, but a non-empty column must not be deletable → `tasks.column_id` FK with the default `NO ACTION` (checked at statement end), not `RESTRICT`.
+5. RLS makes forbidden updates silently match 0 rows → the repositories use `.select().single()` after writes and map "no row" to `NotFoundError`, matching the mock.
+6. With "Confirm email" on, signing up with an existing address returns a user with no identities instead of an error → treated as `ConflictError("email")`.
+7. The browser realtime channel subscribed before the session loaded and joined as `anon`, so RLS delivered nothing → load the session and `realtime.setAuth()` before `subscribe()`.
+8. `supabase-js` types `.single()`/`.maybeSingle()` data as nullable → two helpers: `data()` (must exist → `NotFoundError`) and `maybe()` (null is a normal answer).
+9. Stopping `next dev` mid-write can leave a truncated `.next/dev/types/validator.ts` that breaks `tsc` → `rm -rf .next`.
+
+## Definition of done
+
+- 227 unit tests (incl. 27 PGlite schema/RLS tests) and 28 e2e tests green in CI; 6 live integration tests green against the project.
+- Supabase security advisor: only the five intended signed-in RPCs remain.
+- Scripted live run: sign in → board → quick-add (atomic key) → drag persists → a second window sees changes via Realtime in ~40 ms.
+
+## Next up: M6
+
+Planned here once M4 is merged: Stripe billing (Lite/Pro, monthly/yearly) with Checkout, Customer Portal and signed, idempotent webhooks syncing `team.plan`; the `assertWithinPlan` helper enforcing member/workspace/AI limits server-side; a billing settings page. Products and prices via the Stripe MCP in test mode.

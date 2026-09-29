@@ -4,7 +4,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 
 export const metadata: Metadata = { title: "Sign up" };
 
-export default function SignUpPage() {
+export default async function SignUpPage({ searchParams }: PageProps<"/sign-up">) {
+  const { next } = await searchParams;
   return (
     <Card>
       <CardHeader>
@@ -14,7 +15,7 @@ export default function SignUpPage() {
         <CardDescription>Set up your team in under three minutes.</CardDescription>
       </CardHeader>
       <CardContent>
-        <SignUpForm />
+        <SignUpForm next={typeof next === "string" ? next : "/"} />
       </CardContent>
     </Card>
   );

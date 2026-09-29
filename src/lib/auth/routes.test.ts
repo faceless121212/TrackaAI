@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isOpenPath, isPublicPath, safeNextPath, signInRedirectPath } from "./routes";
+import { isOpenPath, isPublicPath, safeNextPath, signInRedirectPath, withNext } from "./routes";
 
 describe("isPublicPath", () => {
   it("treats sign-in, sign-up and their sub-paths as public", () => {
@@ -46,4 +46,12 @@ describe("safeNextPath", () => {
       expect(safeNextPath(value)).toBe("/");
     },
   );
+});
+
+describe("withNext", () => {
+  it("carries a safe next path between the auth pages", () => {
+    expect(withNext("/sign-up", "/invite/abc")).toBe("/sign-up?next=%2Finvite%2Fabc");
+    expect(withNext("/sign-up", "/")).toBe("/sign-up");
+    expect(withNext("/sign-in", "https://evil.test")).toBe("/sign-in");
+  });
 });

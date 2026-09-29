@@ -5,15 +5,16 @@ import { useActionState } from "react";
 import { TextField } from "@/components/forms/fields";
 import { Button } from "@/components/ui/button";
 import { FieldGroup } from "@/components/ui/field";
-import { SIGN_IN_PATH } from "@/lib/auth/routes";
+import { SIGN_IN_PATH, withNext } from "@/lib/auth/routes";
 import { initialFormState } from "@/lib/forms";
 import { signUpAction } from "@/server/actions/auth";
 
-export function SignUpForm() {
+export function SignUpForm({ next }: { next: string }) {
   const [state, action, pending] = useActionState(signUpAction, initialFormState);
 
   return (
     <form action={action} className="space-y-6">
+      <input type="hidden" name="next" value={next} />
       <FieldGroup>
         <TextField
           name="name"
@@ -47,7 +48,7 @@ export function SignUpForm() {
       </Button>
       <p className="text-muted-foreground text-center text-sm">
         Already have an account?{" "}
-        <Link href={SIGN_IN_PATH} className="text-foreground underline underline-offset-4">
+        <Link href={withNext(SIGN_IN_PATH, next)} className="text-foreground underline underline-offset-4">
           Sign in
         </Link>
       </p>

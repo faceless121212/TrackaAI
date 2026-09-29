@@ -5,7 +5,7 @@ import { useActionState } from "react";
 import { FormError, TextField } from "@/components/forms/fields";
 import { Button } from "@/components/ui/button";
 import { FieldGroup } from "@/components/ui/field";
-import { SIGN_UP_PATH } from "@/lib/auth/routes";
+import { SIGN_UP_PATH, withNext } from "@/lib/auth/routes";
 import { initialFormState } from "@/lib/forms";
 import { signInAction } from "@/server/actions/auth";
 
@@ -40,7 +40,7 @@ export function SignInForm({ next }: { next: string }) {
       </Button>
       <p className="text-muted-foreground text-center text-sm">
         No account yet?{" "}
-        <Link href={SIGN_UP_PATH} className="text-foreground underline underline-offset-4">
+        <Link href={withNext(SIGN_UP_PATH, next)} className="text-foreground underline underline-offset-4">
           Sign up
         </Link>
       </p>

@@ -32,3 +32,9 @@ export function safeNextPath(next: string | null | undefined): string {
   }
   return next;
 }
+
+/** Links between sign-in and sign-up keep the pending destination (e.g. an invite link). */
+export function withNext(path: string, next: string | null | undefined): string {
+  const safe = safeNextPath(next);
+  return safe === "/" ? path : `${path}?next=${encodeURIComponent(safe)}`;
+}

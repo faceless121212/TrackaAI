@@ -15375,6 +15375,11 @@ Gotchas:
 2. Invitees can't read the team under RLS, so the server-side join check can't see the plan on Supabase; the database's membership trigger does the same check inside `accept_invite`.
 3. `/pricing` must be a reserved team slug (as must `auth`).
 4. A dev server from another project held port 3000 → the local preview config uses `autoPort`.
+5. (Pre-PR review) `/pricing` first shipped as an "open" path, which skips the proxy's session refresh; a page that reads the session there can rotate a refresh token whose new value is never saved → a third route category, **session-optional**: refreshed, never redirected.
+6. (Pre-PR review) Limits only ran on INSERT, but resending an expired invite revives its seat → the invite trigger also fires on updates that make an invite live, managers may only update an invite's token and expiry, and `resendInviteAction` re-checks.
+7. (Pre-PR review) Two concurrent inserts could both pass a count check → each limit trigger locks the team row (`select … for update`) before counting.
+8. (Pre-PR review) Plan-limit copy is for the owner: invitees are told the team is full and to ask the owner; admins get "Ask the team owner to upgrade."
+9. Old local `.data/mock-db.json` files keep Acme on the old default; delete `.data/` to reseed (Acme is on Pro).
 
 ## Next up: M7
 

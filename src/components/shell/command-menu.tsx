@@ -1,6 +1,6 @@
 "use client";
 
-import { Moon, Search, Sun } from "lucide-react";
+import { Moon, Search, SquareKanban, Sun } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
 import { useEffect, useState } from "react";
@@ -14,9 +14,16 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
-import { NAV_ITEMS } from "./nav-items";
+import { boardPath } from "@/lib/paths";
+import { navItems } from "./nav-items";
 
-export function CommandMenu() {
+export function CommandMenu({
+  teamSlug,
+  boards,
+}: {
+  teamSlug: string;
+  boards: { id: string; name: string }[];
+}) {
   const [open, setOpen] = useState(false);
   const router = useRouter();
   const { setTheme } = useTheme();
@@ -55,13 +62,26 @@ export function CommandMenu() {
           <CommandList>
             <CommandEmpty>No results.</CommandEmpty>
             <CommandGroup heading="Navigation">
-              {NAV_ITEMS.map((item) => (
+              {navItems(teamSlug).map((item) => (
                 <CommandItem key={item.href} onSelect={() => run(() => router.push(item.href))}>
                   <item.icon />
                   {item.title}
                 </CommandItem>
               ))}
             </CommandGroup>
+            {boards.length > 0 && (
+              <CommandGroup heading="Boards">
+                {boards.map((board) => (
+                  <CommandItem
+                    key={board.id}
+                    onSelect={() => run(() => router.push(boardPath(teamSlug, board.id)))}
+                  >
+                    <SquareKanban />
+                    {board.name}
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            )}
             <CommandGroup heading="Theme">
               <CommandItem onSelect={() => run(() => setTheme("dark"))}>
                 <Moon />

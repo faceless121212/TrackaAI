@@ -46,7 +46,7 @@ This file holds the detailed, task-level plan for the **current** milestone. Eac
 1. `create-next-app` refuses a non-empty directory → scaffold into a sibling folder, then copy in.
 2. `create-next-app --agents-md` writes `AGENTS.md` and a `CLAUDE.md` containing only `@AGENTS.md`. Keep our `CLAUDE.md` and add `@AGENTS.md` as its first line.
 3. The default `.gitignore` has `.env*`, which would also ignore `.env.example` → add `!.env.example`.
-4. `shadcn init` prompts for a preset unless given `-p nova`; it also adds a stray `cn` npm dependency → remove it.
+4. `shadcn init` prompts for a preset unless given `-p nova`. Since late Sept 2026 the registry also emits `src/lib/utils.ts` as `export { cn } from "cn"` and imports `"cn"` directly in `ui/*` → after `pnpm remove cn`, write the classic `cn()` (`clsx` + `tailwind-merge`) in `src/lib/utils.ts` and rewrite `from "cn"` to `from "@/lib/utils"`. Repeat the rewrite after every `shadcn add`.
 5. shadcn's generated `src/hooks/use-mobile.ts` fails Next 16's `react-hooks/set-state-in-effect` lint rule → replace it (Task 5).
 6. In this shadcn version `CommandDialog` does **not** wrap children in `<Command>` → wrap them yourself or cmdk crashes.
 7. The shadcn `Sidebar` tooltips need a `TooltipProvider` at the root, or prerendering fails.
@@ -723,7 +723,10 @@ git commit -m "feat(data): define repository interfaces and backend switch"
 pnpm dlx shadcn@4.21.0 init -t next -b radix -p nova -y --no-monorepo
 pnpm dlx shadcn@4.21.0 add sidebar sonner command dropdown-menu tooltip separator dialog sheet input avatar badge -y
 pnpm remove cn
+pnpm add clsx tailwind-merge
+grep -rl 'from "cn"' src | xargs sed -i '' 's#from "cn"#from "@/lib/utils"#'
 ```
+Then make `src/lib/utils.ts` the classic `cn()` (`twMerge(clsx(inputs))`) — see gotcha 4.
 Expected: `components.json` has `"style": "radix-nova"`; `src/components/ui/` contains the listed components; `next-themes` is in dependencies.
 
 - [ ] **Step 2: Replace** `src/hooks/use-mobile.ts` (gotcha 5)

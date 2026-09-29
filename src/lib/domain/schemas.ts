@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MAX_INVITES_PER_BATCH, RESERVED_SLUGS } from "./constants";
 
 export const ROLES = ["owner", "admin", "member"] as const;
 export const PRIORITIES = ["none", "low", "medium", "high", "urgent"] as const;
@@ -13,13 +14,18 @@ export const slugSchema = z
   .string()
   .min(2)
   .max(40)
-  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Use lowercase letters, numbers and single dashes");
+  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Use lowercase letters, numbers and single dashes")
+  .refine((slug) => !RESERVED_SLUGS.includes(slug), "This name is reserved");
 
 export const keyPrefixSchema = z
   .string()
   .regex(/^[A-Z][A-Z0-9]{1,4}$/, "Use 2–5 uppercase letters or digits, starting with a letter");
 
 const timestampSchema = z.iso.datetime();
+
+// Trim and lowercase before checking the format, so " Ann@X.test " is valid.
+export const emailSchema = z.string().trim().toLowerCase().pipe(z.email("Enter a valid email"));
+export const passwordSchema = z.string().min(8, "Use at least 8 characters").max(72);
 
 export const userSchema = z.object({
   id: idSchema,
@@ -94,6 +100,37 @@ export const taskSchema = z.object({
   updatedAt: timestampSchema,
 });
 
+export const inviteSchema = z.object({
+  id: idSchema,
+  teamId: idSchema,
+  email: z.email(),
+  role: roleSchema.exclude(["owner"]),
+  token: z.string().min(16),
+  invitedBy: idSchema,
+  expiresAt: timestampSchema,
+  acceptedAt: timestampSchema.nullable(),
+  createdAt: timestampSchema,
+});
+
+export const signUpInputSchema = z.object({
+  name: userSchema.shape.name,
+  email: emailSchema,
+  password: passwordSchema,
+});
+
+export const signInInputSchema = z.object({
+  email: emailSchema,
+  password: z.string().min(1, "Enter your password"),
+});
+
+export const createInvitesInputSchema = z.object({
+  teamId: idSchema,
+  emails: z
+    .array(emailSchema)
+    .min(1, "Add at least one email")
+    .max(MAX_INVITES_PER_BATCH, `Invite at most ${MAX_INVITES_PER_BATCH} people at a time`),
+});
+
 export const createTeamInputSchema = teamSchema.pick({ name: true, slug: true });
 
 export const createWorkspaceInputSchema = workspaceSchema.pick({
@@ -142,6 +179,10 @@ export type Board = z.infer<typeof boardSchema>;
 export type Column = z.infer<typeof columnSchema>;
 export type Assignee = z.infer<typeof assigneeSchema>;
 export type Task = z.infer<typeof taskSchema>;
+export type Invite = z.infer<typeof inviteSchema>;
+export type SignUpInput = z.infer<typeof signUpInputSchema>;
+export type SignInInput = z.infer<typeof signInInputSchema>;
+export type CreateInvitesInput = z.infer<typeof createInvitesInputSchema>;
 export type CreateTeamInput = z.infer<typeof createTeamInputSchema>;
 export type CreateWorkspaceInput = z.infer<typeof createWorkspaceInputSchema>;
 export type CreateBoardInput = z.infer<typeof createBoardInputSchema>;

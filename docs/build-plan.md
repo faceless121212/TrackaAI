@@ -14,7 +14,7 @@ This file holds the detailed, task-level plan for the **current** milestone. Eac
 | M3 — Team & user management | ✅ Done |
 | M4 — Supabase (hosted, no Docker) | ✅ Done |
 | M5 — Emails (Resend) | ⏭️ Skipped (decision) |
-| M6 — Billing (Stripe) | Planned when M4 is merged |
+| M6 — Billing (Stripe) | 📝 Plan drafted — awaiting review |
 | M7 — AI I: task writer & breakdown | — |
 | M8 — AI II: board copilot | — |
 | M9 — AI III: AI teammate | — |
@@ -15357,6 +15357,158 @@ Contract changes: `auth.signUp` → `{ user, needsConfirmation }`; `invites.prev
 - Supabase security advisor: only the five intended signed-in RPCs remain.
 - Scripted live run: sign in → board → quick-add (atomic key) → drag persists → a second window sees changes via Realtime in ~40 ms.
 
-## Next up: M6
+---
 
-Planned here once M4 is merged: Stripe billing (Lite/Pro, monthly/yearly) with Checkout, Customer Portal and signed, idempotent webhooks syncing `team.plan`; the `assertWithinPlan` helper enforcing member/workspace/AI limits server-side; a billing settings page. Products and prices via the Stripe MCP in test mode.
+# M6 — Billing (Stripe) — Implementation plan
+
+**Goal:** Teams start on a free plan and can upgrade to Lite or Pro through Stripe Checkout. Webhooks keep each team's plan in sync. Plan limits are enforced on the server and in the database. Pricing is shown on a public `/pricing` page and on an in-app billing page.
+
+**Status:** draft for review. Items marked **⚑ Decide** are open choices; each has a default the plan uses unless you say otherwise.
+
+## Plans and limits
+
+| | **Free** | **Lite** | **Pro** |
+|---|---|---|---|
+| Team size | Just you (1) | You + 2 members (3) | Unlimited |
+| Projects | 1 | 10 | Unlimited |
+| AI task writer & breakdown (M7) | 10 runs/month | 100 runs/month | Unlimited (fair use) |
+| Board copilot (M8), AI teammate (M9) | — | — | ✓ |
+| Price | $0 | `STRIPE_LITE_PRICE_ID` | `STRIPE_PRO_PRICE_ID` |
+
+- **⚑ Decide: what "project" means.** Default: a **workspace** (the `ENG`-style container that holds boards). The PRD's limits were on workspaces, and onboarding already creates one. If you meant boards, it's a one-word change in the catalog plus the matching database trigger.
+- **⚑ Decide: pending invites.** Default: they count toward team size. Otherwise a Free or Lite team could send unlimited invites and exceed its size when they're accepted.
+- **⚑ Decide: AI numbers and Pro-only features.** Default: the table above. They're only stored now and enforced in M7–M9.
+- **⚑ Decide: trial.** Default: **none**, since Free exists. The PRD's 14-day Pro trial is dropped unless you want it. It would be a flag on Checkout (`trial_period_days`).
+- **Monthly only.** You listed one price ID per plan. Yearly prices would add `STRIPE_*_YEARLY_PRICE_ID` and a toggle on the pricing table.
+- **Billing is the owner's** (PRD §3). Admins and members can view the billing page but can't change it.
+- **Downgrades and cancellations never delete data.** A team over its new limits keeps everything but can't add more members or projects until it's back under the limit or upgrades. A banner explains why.
+
+## Architecture
+
+```
+Pricing UI ──(owner)──> server action ──> BillingGateway (Stripe | fake)
+                                            │ Checkout / Portal / change plan
+Stripe ──webhook──> /api/webhooks/stripe ──> verify signature → record event (idempotent)
+                                            → fetch latest subscription from Stripe
+                                            → syncSubscription(): subscriptions row + teams.plan
+Every create/invite/accept ──> assertWithinPlan(team, resource)   (server)
+                           └─> plan-limit triggers in Postgres     (database backstop)
+```
+
+- **One catalog** in `src/lib/domain/plans.ts` holds names, limits and features. The pricing pages, `assertWithinPlan` and the tests all read it. A PGlite test checks that the SQL limits match it.
+- **`BillingGateway` interface** (`src/server/billing/gateway.ts`), with two implementations:
+  - **Stripe**, in `stripe-gateway.ts`, used when the `STRIPE_*` variables are set.
+  - **Fake**, used by CI, e2e and the mock backend. There, "upgrade" completes instantly through the same `syncSubscription`.
+  - Selected by `BILLING_GATEWAY=stripe|fake`. The default is `stripe` when the keys are present, otherwise `fake`.
+- **Webhooks re-fetch the subscription** from Stripe instead of trusting the event payload. Out-of-order or duplicated events then can't leave a stale plan.
+- **Webhook database writes need a privileged client.** Stripe calls the webhook without a user session. The Supabase backend therefore needs **`SUPABASE_SECRET_KEY`**, which only you put in `.env.local`; I never see it. It is used in exactly one module (`src/server/data/supabase/admin-client.ts`, `server-only`) and only by the billing repository's webhook path. The mock backend needs nothing.
+
+## Data model (migration `…_billing.sql`)
+
+- **`teams.plan`:** allow `'free'`, default `'free'`, and move existing teams to `'free'`. Only billing can change it, since M4's column grants already block direct writes.
+- **`subscriptions`** (one per team):
+  - Columns: `team_id` (PK, FK cascade), `stripe_customer_id` (unique), `stripe_subscription_id` (unique, nullable), `price_id`, `status`, `current_period_end`, `cancel_at_period_end`, `updated_at`.
+  - RLS: team members can read; no API writes.
+- **`stripe_events`:** `id` (PK, the Stripe event id), `type`, `received_at`. RLS is on with no policies, so only the privileged client can use it. This makes webhooks idempotent.
+- **Limit triggers:** `private.plan_limit(team, resource)`, plus BEFORE INSERT triggers on `workspaces`, `invites` and memberships inserted by `accept_invite`. They raise `plan_limit_reached` (mapped to `PlanLimitError`). This closes the direct `/rest/v1` bypass around the server actions.
+- **Repository contract** (`types.ts`), implemented in both mock and Supabase:
+  - `billing.getForTeam(teamId)`
+  - `billing.usage(teamId)` → `{ members, pendingInvites, workspaces }`
+  - `billing.recordEvent(id, type)` → `boolean` (false if already seen)
+  - `billing.syncSubscription(teamId, snapshot)` → writes the row and `teams.plan` together (an RPC on Supabase)
+  - `billing.findTeamByCustomer(customerId)`
+
+## Stripe flows
+
+1. **Upgrade from Free (Checkout):** `startCheckoutAction(teamSlug, "lite" | "pro")`.
+   - Owner only. The server maps the plan name to its price ID, so the client never sends a price.
+   - Creates or reuses the Stripe customer (`metadata.team_id`), then a Checkout Session in `mode: "subscription"` with `client_reference_id = team.id` and `subscription_data.metadata.team_id`.
+   - `success_url` is `/{team}/settings/billing?checkout=success`; `cancel_url` returns to the same page.
+   - Redirects to Stripe.
+2. **Switch Lite ↔ Pro:** `changePlanAction`. Updates the subscription item's price with proration. The webhook confirms the change, and the UI shows "Updating…" until it lands.
+3. **Manage payment method, invoices or cancel:** `openPortalAction` opens the Stripe Customer Portal. Cancelling means cancel at period end: the team stays on its plan until `current_period_end`, then drops to Free.
+4. **Deleting a team** cancels its subscription immediately first.
+5. **Webhook `/api/webhooks/stripe`:**
+   - Runs on the Node runtime and reads the raw body with `request.text()`, then calls `stripe.webhooks.constructEvent` with `STRIPE_WEBHOOK_SECRET`. A bad signature returns 400.
+   - Handled events: `checkout.session.completed`, `customer.subscription.created|updated|deleted` and `invoice.payment_failed|paid`.
+   - Each event is recorded, skipped if already seen, then the subscription is re-fetched and synced. It returns 200 quickly, and handler errors return 500 so Stripe retries.
+   - `/api` is already outside `proxy.ts`'s matcher.
+6. **Status → plan (a pure function, tested):**
+   - `active` or `trialing` → the plan for that price.
+   - `past_due` → keep the plan (Stripe retries payment) and show a "Payment failed" banner.
+   - `canceled`, `unpaid`, `incomplete_expired` or a missing subscription → `free`.
+   - An unknown price ID → `free`, with a logged error.
+   - Note: in current Stripe API versions `current_period_end` is on the subscription **item**, not the subscription.
+
+## Pricing pages
+
+- **`/pricing` (public).** Add it to `OPEN_PATHS` so it works signed in or out.
+  - Uses the shared `PricingTable` (three cards from the catalog).
+  - Signed out, the call to action is "Get started" → `/sign-up`. Signed in, it goes to the chosen team's billing page.
+  - Linked from the sign-in and sign-up pages.
+- **`/[team]/settings/billing`** (new "Billing" item in the settings nav):
+  - Current plan and status.
+  - Usage meters (team size x/3, projects x/10).
+  - The same `PricingTable` with "Current plan", "Upgrade", "Switch" and "Downgrade" actions, plus "Manage billing" (Portal).
+  - Banners for checkout success, cancellation scheduled, payment failed and over the limit.
+- **Prices shown** come from Stripe (`prices.retrieve`, cached for an hour). Without Stripe configured (CI or mock), the cards show "—".
+- **Upgrade prompts** where limits bite:
+  - `PlanLimitError` from any action becomes a toast with an **Upgrade** button.
+  - On Free, the members page shows an upgrade card instead of the invite form.
+  - The onboarding invite step is skipped for Free teams.
+  - "New project" is disabled at the limit, with a tooltip and link.
+
+## Tasks (TDD, one commit each)
+
+1. **Plan catalog** (`src/lib/domain/plans.ts` + test): plans, limits, features, `limitFor`, `canAdd(plan, resource, usage)`, `planForPriceId`, `planFromSubscriptionStatus`. Add `free` to `PLANS`.
+2. **Repository contract + mock:** `BillingRepo` in `types.ts`, the mock implementation and tests. New teams start on `free`, and the mock seed's Acme becomes Free.
+3. **Migration + PGlite tests:**
+   - The tables, grants and RLS above, plus the `sync_subscription` RPC (service role only) and the limit triggers.
+   - Tests cover: members can read their subscription but not write it; limits enforced for workspaces, invites and accept; a direct REST insert over the limit is rejected; and TS/SQL limit parity.
+   - Apply to the hosted project with the Supabase MCP and rerun the advisors.
+4. **Supabase `BillingRepo` + admin client** (server-only; `SUPABASE_SECRET_KEY`), with a live integration test that is skipped when the key is absent.
+5. **`assertWithinPlan` + `PlanLimitError`** (`src/server/billing/limits.ts`). Wire it into workspace creation (settings and onboarding), invites (members page and onboarding) and invite acceptance, and map the error in `toActionError` and the form states. Tests cover each call site.
+6. **`BillingGateway`:**
+   - The Stripe implementation (`stripe` SDK, API version pinned) and the fake.
+   - Env parsing with Zod, with a `billingConfigured()` check.
+   - Owner-only actions: `startCheckout`, `changePlan`, `openPortal`, plus cancel-on-team-delete. Tested with the fake.
+7. **Webhook route + `syncSubscription`:** tests use `stripe.webhooks.generateTestHeaderString` to check signed requests, a bad signature (400), a duplicate event (processed once), out-of-order events and each status → plan mapping.
+8. **UI:** `PricingTable`, the public `/pricing`, the billing settings page, the settings nav item, banners and upgrade prompts, and hiding owner-only actions. shadcn components (`card`, `badge`, `progress`, `alert`), theme tokens only.
+9. **E2E (fake gateway):**
+   - `/pricing` is reachable signed out and signed in.
+   - A Free team is blocked from a 2nd project and from inviting, and sees the upgrade prompt.
+   - Upgrading to Lite through the fake checkout lifts the limits and caps the team at 3.
+   - Downgrading keeps the data but blocks new creates.
+   - Admins see billing read-only.
+10. **Stripe test-mode setup and a live run:**
+    - Products and prices, and Portal configuration (plan switching, cancel at period end).
+    - `stripe listen --forward-to localhost:3000/api/webhooks/stripe` for the local webhook secret.
+    - A scripted run with test cards: `4242…` for upgrade Free → Lite → Pro, portal cancel → Free at period end (using a Stripe test clock), `4000 0000 0000 0341` for a failed payment → past_due banner.
+11. **Docs:**
+    - `.env.example`: the 5 Stripe variables, `SUPABASE_SECRET_KEY` and `BILLING_GATEWAY`.
+    - README billing section.
+    - PRD §5.5 updated with these limits.
+    - `docs/plan.md` M6 marked ✅, and the build record.
+12. Pre-PR review (read-only subagent) → fix findings → PR → auto-merge.
+
+## What I need from you
+
+- **Answers to the four ⚑ Decide items**, or "defaults are fine".
+- **Stripe test mode**, one of:
+  - connect the **Stripe MCP** connector, so I create the products and prices; or
+  - create two recurring monthly prices ("Lite", "Pro") in the Stripe dashboard yourself and put their IDs in `.env.local`.
+- **In `.env.local`, filled in by you:**
+  - `STRIPE_SECRET_KEY` (a test key, `sk_test_…`)
+  - `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` (`pk_test_…`)
+  - `STRIPE_LITE_PRICE_ID` and `STRIPE_PRO_PRICE_ID`
+  - `SUPABASE_SECRET_KEY`, for webhooks on the Supabase backend
+- **The Stripe CLI**, for local webhooks: `brew install stripe/stripe-cli/stripe`, then `stripe login`, which opens your browser. `stripe listen` prints the `whsec_…` value for `STRIPE_WEBHOOK_SECRET`.
+- **Everything through task 9 can be built and tested without any keys**, using the fake gateway. The keys are only needed for task 10's live run.
+
+## Definition of done
+
+- A test-card upgrade, plan switch, cancellation and failed payment each sync `teams.plan` and the billing page correctly.
+- Replayed and out-of-order webhooks don't change the result.
+- Limits are enforced by `assertWithinPlan` **and** by the database.
+- `/pricing` works signed in and signed out.
+- lint, typecheck, unit, PGlite, e2e and build all pass; the Supabase advisors show no new warnings.

@@ -127,7 +127,7 @@ export function createMockRepositories(store: MockStore, session: SessionStore =
           if (db.teams.some((t) => t.slug === slug)) {
             throw new ConflictError("slug", "This URL is already taken");
           }
-          const team = { id: newId(), name, slug, plan: "lite" as const, createdAt: now() };
+          const team = { id: newId(), name, slug, plan: "free" as const, createdAt: now() };
           db.teams.push(team);
           db.memberships.push({ teamId: team.id, userId: ownerId, role: "owner", joinedAt: now() });
           for (const label of DEFAULT_LABELS) db.labels.push({ id: newId(), teamId: team.id, ...label });
@@ -145,6 +145,22 @@ export function createMockRepositories(store: MockStore, session: SessionStore =
           const team = find(db.teams, (t) => t.id === id, "Team", id);
           Object.assign(team, patch);
           return team;
+        }),
+      setPlan: (id, plan) =>
+        store.write((db) => {
+          const team = find(db.teams, (t) => t.id === id, "Team", id);
+          team.plan = plan;
+          return team;
+        }),
+      usage: (id) =>
+        store.read((db) => {
+          const now = new Date().toISOString();
+          return {
+            members: db.memberships.filter((m) => m.teamId === id).length,
+            pendingInvites: db.invites.filter((i) => i.teamId === id && i.acceptedAt === null && i.expiresAt > now)
+              .length,
+            workspaces: db.workspaces.filter((w) => w.teamId === id).length,
+          };
         }),
       delete: (id) =>
         store.write((db) => {

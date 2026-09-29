@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState, useState } from "react";
-import { TextField } from "@/components/forms/fields";
+import { FormError, TextField } from "@/components/forms/fields";
 import { Button } from "@/components/ui/button";
 import { FieldGroup } from "@/components/ui/field";
 import { suggestKeyPrefix } from "@/lib/domain";
@@ -53,6 +53,7 @@ export function CreateWorkspaceForm({
           errors={state.fieldErrors?.keyPrefix}
         />
       </FieldGroup>
+      <FormError message={state.formError} upgradeHref={state.upgradeHref} />
       <Button type="submit" className="w-full" disabled={pending}>
         {submitLabel}
       </Button>

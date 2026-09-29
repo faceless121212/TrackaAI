@@ -27,7 +27,7 @@ describe("can", () => {
     expect(can("member", action)).toBe(false);
   });
 
-  it.each(["team:delete", "ownership:transfer"] as const)("limits %s to the owner", (action) => {
+  it.each(["team:delete", "ownership:transfer", "billing:manage"] as const)("limits %s to the owner", (action) => {
     expect(can("owner", action)).toBe(true);
     expect(can("admin", action)).toBe(false);
     expect(can("member", action)).toBe(false);

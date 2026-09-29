@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useActionState } from "react";
+import { FormError } from "@/components/forms/fields";
 import { Button } from "@/components/ui/button";
 import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
 import { Textarea } from "@/components/ui/textarea";
@@ -32,6 +33,7 @@ export function InviteForm({ teamSlug, boardId, skipHref }: { teamSlug: string; 
         </FieldDescription>
         <FieldError>{errors?.[0]}</FieldError>
       </Field>
+      <FormError message={state.formError} upgradeHref={state.upgradeHref} />
       <div className="flex gap-2">
         <Button type="submit" className="flex-1" disabled={pending}>
           Send invites

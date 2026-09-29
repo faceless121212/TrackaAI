@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { column, drag, openFreshBoard, quickAdd, saved, signInAsDemo } from "./helpers";
+import { column, drag, openFreshBoard, quickAdd, saved, signInAsDemo, upgradeTo } from "./helpers";
 
 test("C opens the create dialog and the task is edited in its sheet", async ({ page }) => {
   await openFreshBoard(page);
@@ -135,6 +135,7 @@ test("My tasks lists what is assigned to me and opens it on its board", async ({
 
 test("workspaces and boards are managed from the sidebar", async ({ page }) => {
   await openFreshBoard(page);
+  await upgradeTo(page, "Lite");
 
   await page.getByRole("button", { name: "New workspace" }).click();
   const dialog = page.getByRole("dialog", { name: "New workspace" });

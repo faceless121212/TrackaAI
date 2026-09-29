@@ -10,6 +10,7 @@ const SECTIONS: { section: SettingsSection; label: string }[] = [
   { section: "members", label: "Members" },
   { section: "labels", label: "Labels" },
   { section: "profile", label: "Profile" },
+  { section: "billing", label: "Billing" },
 ];
 
 export function SettingsNav({ teamSlug }: { teamSlug: string }) {
@@ -18,7 +19,7 @@ export function SettingsNav({ teamSlug }: { teamSlug: string }) {
     <nav aria-label="Settings" className="flex gap-1 border-b">
       {SECTIONS.map(({ section, label }) => {
         const href = settingsPath(teamSlug, section);
-        const active = pathname === href;
+        const active = pathname === href || (section !== "general" && pathname.startsWith(`${href}/`));
         return (
           <Link
             key={section}

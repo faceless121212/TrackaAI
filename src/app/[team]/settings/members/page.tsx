@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import {
   InviteMembersForm,
   LeaveTeamButton,
@@ -6,7 +7,8 @@ import {
   PendingInvites,
 } from "@/components/settings/members";
 import { SettingsSection } from "@/components/settings/settings-section";
-import { invitePath } from "@/lib/paths";
+import { canAdd, planLimitMessage } from "@/lib/domain";
+import { invitePath, settingsPath } from "@/lib/paths";
 import { absoluteUrl } from "@/server/actions/shared";
 import { requireTeamMember } from "@/server/auth/guards";
 import { assignableRoles, can, canLeaveTeam, canManageMember } from "@/server/auth/permissions";
@@ -22,6 +24,7 @@ export default async function MembersPage({ params }: PageProps<"/[team]/setting
     repos.memberships.listMembers(team.id),
     canInvite ? repos.invites.listPending(team.id) : Promise.resolve([]),
   ]);
+  const hasRoom = canAdd(team.plan, "members", members.length + invites.length);
   const inviteRows = await Promise.all(
     invites.map(async (invite) => ({
       id: invite.id,
@@ -55,9 +58,19 @@ export default async function MembersPage({ params }: PageProps<"/[team]/setting
         <>
           <SettingsSection
             title="Invite people"
-            description="They get a link that is valid for 7 days. Emails start sending in M5; until then, copy the link below."
+            description="They get a link that is valid for 7 days. Copy it from the pending invites below and send it to them."
           >
-            <InviteMembersForm teamSlug={team.slug} />
+            {hasRoom ? (
+              <InviteMembersForm teamSlug={team.slug} />
+            ) : (
+              <p className="text-muted-foreground text-sm">
+                {planLimitMessage(team.plan, "members")}
+                {!can(membership.role, "billing:manage") && " Ask the team owner to upgrade."}{" "}
+                <Link href={settingsPath(team.slug, "billing")} className="text-foreground font-medium underline underline-offset-4">
+                  See plans
+                </Link>
+              </p>
+            )}
           </SettingsSection>
           <SettingsSection title="Pending invites">
             <PendingInvites invites={inviteRows} />

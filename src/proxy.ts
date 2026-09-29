@@ -4,6 +4,7 @@ import {
   SESSION_COOKIE,
   isOpenPath,
   isPublicPath,
+  isSessionOptionalPath,
   signInRedirectPath,
 } from "@/lib/auth/routes";
 import { resolveDataBackend } from "@/server/data/backend";
@@ -41,6 +42,8 @@ export async function proxy(request: NextRequest) {
     hasSession = request.cookies.has(SESSION_COOKIE);
   }
 
+  // Pages may read the session (refreshed above) without anyone being redirected.
+  if (isSessionOptionalPath(pathname)) return response ?? NextResponse.next();
   if (!hasSession && !isPublicPath(pathname)) {
     return redirect(new URL(signInRedirectPath(pathname, search), request.url), response);
   }

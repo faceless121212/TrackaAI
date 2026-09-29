@@ -71,20 +71,22 @@ Team ──< AiAgent (the assignable AI teammate)
 - Invite by email (link with token, 7-day expiry), resend/revoke invites.
 - Profile: name, avatar, theme preference.
 
-### 5.5 Billing (Stripe)
-- Plans: **Lite** and **Pro**, monthly and yearly, 14-day Pro trial on team creation _(proposed)_.
-- Stripe Checkout to subscribe, Customer Portal to manage/cancel. Webhooks keep `team.plan` and `subscription_status` in sync.
-- Plan limits enforced server-side:
+### 5.5 Plans & billing
+- Plans: **Free**, **Lite** and **Pro**, per team, monthly. No trial: Free is the starting plan.
+- Billing is **simulated** for now (decision 2026-09-29): the owner upgrades through an in-app test checkout and nothing is charged. Stripe (Checkout, Customer Portal, webhooks syncing `team.plan`) can replace it later.
+- Only the owner changes the plan. Downgrades keep all data; a team above its new limits can't add more until it's back under them.
+- Plan limits enforced server-side (and in the database):
 
-| | Lite | Pro |
-|---|---|---|
-| Members | up to 5 | unlimited |
-| Workspaces | 2 | unlimited |
-| AI task writer & breakdown | 50 runs / month | unlimited (fair use) |
-| Board copilot | — | ✓ |
-| AI teammate | — | ✓ |
+| | Free | Lite | Pro |
+|---|---|---|---|
+| Price (per team / month) | $0 | $10 | $25 |
+| People (incl. owner and pending invites) | 1 | 3 | unlimited |
+| Workspaces ("projects") | 1 | 10 | unlimited |
+| AI task writer & breakdown | 10 runs / month | 100 runs / month | unlimited (fair use) |
+| Board copilot | — | — | ✓ |
+| AI teammate | — | — | ✓ |
 
-_(Limits are proposals — confirm before M6.)_
+- Pricing is shown on a public `/pricing` page and on the team's billing settings page.
 
 ### 5.6 AI features (Vercel AI SDK)
 1. **Task writer** — from a one-liner, generate title, description with acceptance criteria, suggested priority and labels. Streams into the create dialog; user accepts/edits.
@@ -125,6 +127,6 @@ AI usage is metered per team per month (`ai_usage` table) to enforce plan limits
 
 ## 10. Open questions
 1. What is the 5th AI capability ("something else")?
-2. Confirm Lite/Pro limits, prices and whether there's a free tier or trial.
+2. ~~Confirm Lite/Pro limits, prices and whether there's a free tier or trial.~~ Decided in M6 (§5.5).
 3. Is Google OAuth needed in v1?
 4. Domain for Resend sending (needed before real emails leave local dev).

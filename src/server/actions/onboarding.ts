@@ -14,7 +14,7 @@ import { requireTeamMember } from "@/server/auth/guards";
 import { assertCan } from "@/server/auth/permissions";
 import { requireUser } from "@/server/auth/session";
 import { getRepositories } from "@/server/data";
-import { conflictToFormState, createWorkspaceWithBoard, deliverInvites } from "./shared";
+import { assertRoomForInvites, conflictToFormState, createWorkspaceWithBoard, deliverInvites } from "./shared";
 
 export async function createTeamAction(_prev: FormState, formData: FormData): Promise<FormState> {
   const user = await requireUser();
@@ -43,9 +43,9 @@ export async function createWorkspaceAction(_prev: FormState, formData: FormData
 
   let boardId: string;
   try {
-    boardId = (await createWorkspaceWithBoard(parsed.data)).board.id;
+    boardId = (await createWorkspaceWithBoard(team, parsed.data)).board.id;
   } catch (error) {
-    return conflictToFormState(error, values);
+    return conflictToFormState(error, values, { slug: team.slug, role: membership.role });
   }
   redirect(onboardingInvitePath(team.slug, boardId));
 }
@@ -61,7 +61,13 @@ export async function sendInvitesAction(_prev: FormState, formData: FormData): P
   // Errors on individual addresses (emails.3) flatten onto "emails".
   if (!parsed.success) return { fieldErrors: z.flattenError(parsed.error).fieldErrors, values };
 
-  const invites = await getRepositories().invites.create({ ...parsed.data, invitedBy: user.id });
+  let invites;
+  try {
+    await assertRoomForInvites(team, parsed.data.emails);
+    invites = await getRepositories().invites.create({ ...parsed.data, invitedBy: user.id });
+  } catch (error) {
+    return conflictToFormState(error, values, { slug: team.slug, role: membership.role });
+  }
   await deliverInvites(invites);
   redirect(values.boardId ? boardPath(team.slug, values.boardId) : teamPath(team.slug));
 }

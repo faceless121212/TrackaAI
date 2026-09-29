@@ -14,7 +14,7 @@ This file holds the detailed, task-level plan for the **current** milestone. Eac
 | M3 — Team & user management | ✅ Done |
 | M4 — Supabase (hosted, no Docker) | ✅ Done |
 | M5 — Emails (Resend) | ⏭️ Skipped (decision) |
-| M6 — Billing (Stripe) | Planned when M4 is merged |
+| M6 — Plans & billing (simulated) | ✅ Done |
 | M7 — AI I: task writer & breakdown | — |
 | M8 — AI II: board copilot | — |
 | M9 — AI III: AI teammate | — |
@@ -15357,6 +15357,30 @@ Contract changes: `auth.signUp` → `{ user, needsConfirmation }`; `invites.prev
 - Supabase security advisor: only the five intended signed-in RPCs remain.
 - Scripted live run: sign in → board → quick-add (atomic key) → drag persists → a second window sees changes via Realtime in ~40 ms.
 
-## Next up: M6
+---
 
-Planned here once M4 is merged: Stripe billing (Lite/Pro, monthly/yearly) with Checkout, Customer Portal and signed, idempotent webhooks syncing `team.plan`; the `assertWithinPlan` helper enforcing member/workspace/AI limits server-side; a billing settings page. Products and prices via the Stripe MCP in test mode.
+# M6 — Plans & billing (simulated) — Build record
+
+The draft plan (Stripe Checkout, Customer Portal, webhooks) was replaced mid-milestone by the user's decision: **skip Stripe and simulate billing**. Open choices took the draft's defaults: "project" = workspace, pending invites hold a seat, no trial, AI limits stored for M7–M9. What shipped:
+
+- **Catalog** (`src/lib/domain/plans.ts`): Free / Lite / Pro with prices ($0 / $10 / $25 per team per month, display only), limits, features, `canAdd`, `nextPlanFor`, `planLimitMessage`, `planFeatures`.
+- **Data:** `teams.plan` gains `free` (the default); `TeamsRepo.setPlan` and `TeamsRepo.usage` (members, live pending invites, workspaces) in both backends. `PlanLimitError` (a `ConflictError`) carries the plan and resource.
+- **Database** (`…200000_plans_and_limits.sql`): `private.plan_limit` (kept equal to the catalog by a PGlite test), BEFORE INSERT triggers on workspaces, invites and memberships raising `plan_limit_reached`, `team_usage()` for members and invitees, and owner-only `set_team_plan()` (the simulated checkout; a real provider's webhook would call it with the service role instead).
+- **Server:** `assertWithinPlan` / `assertSeatToJoin` / `countNewInvitees` (`src/server/billing/limits.ts`) in workspace creation, invites (settings and onboarding) and invite acceptance; `billing:manage` is owner-only; `completeCheckoutAction` and `downgradeAction`.
+- **UI:** shared `PricingTable`; public `/pricing` (an open path, linked from sign-in and sign-up); **Settings → Billing** with usage meters, plan cards and over-limit/upgraded banners; `/[team]/settings/billing/checkout` (test-mode summary, "Confirm and subscribe"); "See plans" links on limit errors; the onboarding invite step and members page explain the Free limit instead of showing a form that can't work.
+- **Tests:** plan catalog, limit helpers, 6 PGlite plan/limit tests (mutation-checked), a live integration test, and e2e for pricing, limits → upgrade → seats, and downgrade.
+
+Gotchas:
+1. New teams on Free broke every e2e flow that invites people or adds a workspace → an `upgradeTo(page, plan)` helper that goes through the real (simulated) checkout.
+2. Invitees can't read the team under RLS, so the server-side join check can't see the plan on Supabase; the database's membership trigger does the same check inside `accept_invite`.
+3. `/pricing` must be a reserved team slug (as must `auth`).
+4. A dev server from another project held port 3000 → the local preview config uses `autoPort`.
+5. (Pre-PR review) `/pricing` first shipped as an "open" path, which skips the proxy's session refresh; a page that reads the session there can rotate a refresh token whose new value is never saved → a third route category, **session-optional**: refreshed, never redirected.
+6. (Pre-PR review) Limits only ran on INSERT, but resending an expired invite revives its seat → the invite trigger also fires on updates that make an invite live, managers may only update an invite's token and expiry, and `resendInviteAction` re-checks.
+7. (Pre-PR review) Two concurrent inserts could both pass a count check → each limit trigger locks the team row (`select … for update`) before counting.
+8. (Pre-PR review) Plan-limit copy is for the owner: invitees are told the team is full and to ask the owner; admins get "Ask the team owner to upgrade."
+9. Old local `.data/mock-db.json` files keep Acme on the old default; delete `.data/` to reseed (Acme is on Pro).
+
+## Next up: M7
+
+AI I: task writer & breakdown (AI SDK + `@ai-sdk/anthropic`, `ai_usage` metering against the plan's `aiRuns` limit). Planned here once M6 is merged.

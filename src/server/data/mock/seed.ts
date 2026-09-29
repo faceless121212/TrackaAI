@@ -38,6 +38,8 @@ export async function seedDb(): Promise<MockDb> {
 
   const { user } = await repos.auth.signUp(DEMO_USER);
   const team = await repos.teams.create({ name: "Acme", slug: "acme", ownerId: user.id });
+  // The demo team shows every feature; new teams start on Free.
+  await repos.teams.setPlan(team.id, "pro");
   const workspace = await repos.workspaces.create({ teamId: team.id, name: "Engineering", keyPrefix: "ENG" });
   const board = await repos.boards.create({ workspaceId: workspace.id, name: "Engineering", description: null });
   const columns = await repos.boards.listColumns(board.id);

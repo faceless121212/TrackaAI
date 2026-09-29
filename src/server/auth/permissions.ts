@@ -23,6 +23,7 @@ const RULES = {
   "team:update": MANAGERS,
   "label:manage": MANAGERS,
   "team:delete": OWNER,
+  "billing:manage": OWNER,
   "ownership:transfer": OWNER,
 } as const satisfies Record<string, readonly Role[]>;
 

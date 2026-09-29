@@ -1,17 +1,35 @@
 import "server-only";
 import { headers } from "next/headers";
 import { z } from "zod";
-import type { CreateWorkspaceInput, Invite, UpdateTaskInput } from "@/lib/domain";
+import type { CreateWorkspaceInput, Invite, Role, Team, UpdateTaskInput } from "@/lib/domain";
 import { invalidTaskRef } from "@/lib/domain";
 import { resolveAppOrigin } from "@/lib/app-url";
 import type { ActionResult, FormState } from "@/lib/forms";
-import { invitePath } from "@/lib/paths";
-import { ForbiddenError } from "@/server/auth/permissions";
-import { ConflictError, NotFoundError, getRepositories } from "@/server/data";
+import { invitePath, settingsPath } from "@/lib/paths";
+import { ForbiddenError, can } from "@/server/auth/permissions";
+import { assertWithinPlan, countNewInvitees } from "@/server/billing/limits";
+import { ConflictError, NotFoundError, PlanLimitError, getRepositories } from "@/server/data";
 
 // Helpers for the "use server" modules in this folder (not an action module itself).
 
-export function conflictToFormState(error: unknown, values: Record<string, string>): FormState {
+/**
+ * Maps a ConflictError to form errors. For a plan limit, `team` adds a link to
+ * the plans; only the owner can upgrade, so everyone else is told to ask them.
+ */
+export function conflictToFormState(
+  error: unknown,
+  values: Record<string, string>,
+  team?: { slug: string; role: Role },
+): FormState {
+  if (error instanceof PlanLimitError) {
+    if (!team) return { formError: error.message, values };
+    const owner = can(team.role, "billing:manage");
+    return {
+      formError: owner ? error.message : `${error.message} Ask the team owner to upgrade.`,
+      upgradeHref: settingsPath(team.slug, "billing"),
+      values,
+    };
+  }
   if (error instanceof ConflictError) return { fieldErrors: { [error.field]: [error.message] }, values };
   throw error;
 }
@@ -29,8 +47,9 @@ export function toActionError(error: unknown): ActionResult {
 }
 
 /** Creates a workspace plus its default board (PRD §5.1). */
-export async function createWorkspaceWithBoard(input: CreateWorkspaceInput) {
+export async function createWorkspaceWithBoard(team: Pick<Team, "id" | "plan">, input: CreateWorkspaceInput) {
   const repos = getRepositories();
+  await assertWithinPlan(repos, team, "workspaces");
   const workspace = await repos.workspaces.create(input);
   const board = await repos.boards.create({ workspaceId: workspace.id, name: workspace.name, description: null });
   return { workspace, board };
@@ -64,4 +83,11 @@ export async function deliverInvites(invites: Invite[]) {
   for (const invite of invites) {
     console.info(`[invite] ${invite.email} (${invite.role}) → ${await absoluteUrl(invitePath(invite.token))}`);
   }
+}
+
+/** Throws PlanLimitError if inviting `emails` would take the team past its plan's size. */
+export async function assertRoomForInvites(team: Pick<Team, "id" | "plan">, emails: string[]) {
+  const repos = getRepositories();
+  const adding = await countNewInvitees(repos, team.id, emails);
+  if (adding > 0) await assertWithinPlan(repos, team, "members", adding);
 }

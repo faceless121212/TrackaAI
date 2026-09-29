@@ -4,6 +4,8 @@ export type FormState = {
   ok?: boolean;
   fieldErrors?: Partial<Record<string, string[]>>;
   formError?: string;
+  /** Set when a plan limit blocked the action: where to upgrade. */
+  upgradeHref?: string;
   /** Echoed back so inputs keep their values after a failed submit. */
   values?: Record<string, string>;
 };

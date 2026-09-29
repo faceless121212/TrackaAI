@@ -217,7 +217,7 @@ export function InviteMembersForm({ teamSlug }: { teamSlug: string }) {
           Send invites
         </Button>
       </div>
-      <FormError message={state.formError} />
+      <FormError message={state.formError} upgradeHref={state.upgradeHref} />
     </form>
   );
 }

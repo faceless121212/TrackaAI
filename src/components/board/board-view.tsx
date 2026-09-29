@@ -79,7 +79,6 @@ export function BoardView(props: BoardViewProps) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
-  useBoardRealtime(board.id, props.realtime);
   const [tasks, applyTask] = useOptimistic(props.tasks, taskReducer);
   const [columns, applyColumn] = useOptimistic(props.columns, columnReducer);
   const [createOpen, setCreateOpen] = useState(false);
@@ -96,6 +95,11 @@ export function BoardView(props: BoardViewProps) {
   );
   const counts = useMemo(() => groupTasks(columns, tasks), [columns, tasks]);
   const taskById = useMemo(() => new Map(tasks.map((task) => [task.id, task])), [tasks]);
+  const rowIds = useMemo(
+    () => new Set([...props.tasks.map((task) => task.id), ...props.columns.map((column) => column.id)]),
+    [props.tasks, props.columns],
+  );
+  useBoardRealtime(board.id, props.realtime, rowIds);
   const items =
     dragItems ?? Object.fromEntries(Object.entries(visible).map(([id, list]) => [id, list.map((t) => t.id)]));
 

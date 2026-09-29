@@ -33,7 +33,8 @@ export const userSchema = z.object({
   id: idSchema,
   email: z.email(),
   name: z.string().trim().min(1).max(80),
-  avatarUrl: z.url("Enter a full URL, like https://…").nullable(),
+  // http(s) only: javascript:/data: URLs would be unsafe anywhere this ends up as a link or in an email.
+  avatarUrl: z.url({ protocol: /^https?$/, error: "Enter a full URL, like https://…" }).nullable(),
   /** Absent for users created before M3; the app then uses the dark default. */
   theme: themeSchema.optional(),
   createdAt: timestampSchema,

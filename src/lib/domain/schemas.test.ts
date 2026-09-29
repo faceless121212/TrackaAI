@@ -132,6 +132,9 @@ describe("profile, team and label inputs", () => {
       theme: "light",
     });
     expect(updateProfileInputSchema.safeParse({ name: "Ada", avatarUrl: "not a url", theme: "dark" }).success).toBe(false);
+    for (const avatarUrl of ["javascript:alert(1)", "data:image/svg+xml,x", "ftp://a.test/x.png"]) {
+      expect(updateProfileInputSchema.safeParse({ name: "Ada", avatarUrl, theme: "dark" }).success).toBe(false);
+    }
     expect(updateProfileInputSchema.safeParse({ name: "Ada", avatarUrl: null, theme: "sepia" }).success).toBe(false);
   });
 

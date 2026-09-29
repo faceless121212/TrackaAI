@@ -121,6 +121,7 @@ test("labels are managed in settings", async ({ page }) => {
   await page.getByRole("combobox", { name: "Colour for UX" }).click();
   await page.getByRole("option", { name: "Pink" }).click();
   await page.getByRole("button", { name: "Delete Bug" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Delete" }).click();
   await expect(page.getByRole("listitem", { name: "Bug" })).toHaveCount(0);
   // Edits are optimistic; wait until the list has finished saving before reloading.
   await expect(page.getByRole("list", { name: "Labels" })).toHaveAttribute("aria-busy", "false");

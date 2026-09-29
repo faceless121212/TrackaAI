@@ -59,7 +59,7 @@ export default async function InvitePage({ params }: PageProps<"/invite/[token]"
   if (invite.acceptedAt || invite.expiresAt <= new Date().toISOString()) {
     return (
       <InviteCard
-        title="This invite has expired"
+        title={invite.acceptedAt ? "This invite was already used" : "This invite has expired"}
         description={`Ask someone in ${team.name} to send you a new invite.`}
       />
     );

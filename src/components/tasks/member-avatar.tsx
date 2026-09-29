@@ -16,14 +16,17 @@ function initials(name: string) {
 export function MemberAvatar({
   member,
   className,
+  fallbackClassName,
 }: {
   member: Pick<MemberOption, "name" | "avatarUrl">;
   className?: string;
+  /** Initials size for very small avatars (e.g. 14px on board cards). */
+  fallbackClassName?: string;
 }) {
   return (
     <Avatar title={member.name} className={cn("size-6", className)}>
       {member.avatarUrl && <AvatarImage src={member.avatarUrl} alt="" />}
-      <AvatarFallback className="text-[10px] font-medium">{initials(member.name)}</AvatarFallback>
+      <AvatarFallback className={cn("text-[10px] font-medium", fallbackClassName)}>{initials(member.name)}</AvatarFallback>
     </Avatar>
   );
 }

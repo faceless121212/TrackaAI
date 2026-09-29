@@ -2,7 +2,7 @@
 
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { CalendarDays } from "lucide-react";
+import { CalendarDays, CircleUserRound } from "lucide-react";
 import Link from "next/link";
 import { LabelChip } from "@/components/tasks/label-chip";
 import { MemberAvatar, type MemberOption } from "@/components/tasks/member-avatar";
@@ -18,39 +18,62 @@ type CardProps = {
 };
 
 export function TaskCardView({ task, href, labels, assignee, className }: CardProps & { className?: string }) {
-  const hasMeta = labels.length > 0 || assignee || task.dueDate;
+  const hasProperties = task.priority !== "none" || labels.length > 0 || task.dueDate;
   return (
+    // Linear's card: id + avatar, title, then a row of property chips.
     <article
       aria-busy={task.id.startsWith("draft-")}
       className={cn(
-        "bg-card hover:border-ring/60 relative space-y-2 rounded-md border p-3 text-sm shadow-xs transition-colors",
+        "bg-card border-border/70 hover:border-border relative flex flex-col rounded-[9px] border pt-2 pr-2.5 pb-3 pl-3 transition-colors",
         className,
       )}
     >
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-muted-foreground font-mono text-xs">{task.key}</span>
-        <PriorityIcon priority={task.priority} />
+      <div className="flex h-[22px] items-center justify-between gap-2">
+        <span className="text-muted-foreground text-[10px] leading-[14px] tabular-nums">{task.key}</span>
+        {assignee ? (
+          <MemberAvatar member={assignee} className="size-3.5" fallbackClassName="text-[6px]" />
+        ) : (
+          <CircleUserRound aria-label="Unassigned" className="text-muted-foreground/70 size-3.5" />
+        )}
       </div>
       {/* Stretched link: the whole card opens the task; drags start from the card. */}
-      <Link href={href} scroll={false} draggable={false} className="block font-medium after:absolute after:inset-0">
+      <Link
+        href={href}
+        scroll={false}
+        draggable={false}
+        className="text-foreground/90 line-clamp-3 text-xs leading-[1.4] font-medium after:absolute after:inset-0"
+      >
         {task.title}
       </Link>
-      {hasMeta && (
-        <div className="flex flex-wrap items-center gap-1.5">
+      {hasProperties && (
+        <div className="mt-2.5 flex flex-wrap items-center gap-1">
+          {task.priority !== "none" && (
+            <span className="border-border/70 grid size-6 place-items-center rounded-full border">
+              <PriorityIcon priority={task.priority} className="size-3" />
+            </span>
+          )}
           {labels.map((label) => (
             <LabelChip key={label.id} label={label} />
           ))}
           {task.dueDate && (
-            <span className="text-muted-foreground inline-flex items-center gap-1 text-xs">
+            <span className="border-border/70 text-muted-foreground inline-flex h-6 items-center gap-1 rounded-full border px-2 text-xs font-medium">
               <CalendarDays className="size-3" />
-              {task.dueDate}
+              {formatDue(task.dueDate)}
             </span>
           )}
-          {assignee && <MemberAvatar member={assignee} className="ml-auto" />}
         </div>
       )}
     </article>
   );
+}
+
+/** "2026-10-03" → "Oct 3" (UTC, so server and browser agree). */
+function formatDue(isoDate: string) {
+  return new Date(`${isoDate}T00:00:00Z`).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  });
 }
 
 export function SortableTaskCard(props: CardProps) {

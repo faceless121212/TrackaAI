@@ -11,8 +11,8 @@ This file holds the detailed, task-level plan for the **current** milestone. Eac
 | M0 — Foundation | ✅ Done |
 | M1 — Mock data layer + onboarding | ✅ Done |
 | M2 — Workspaces, boards & Kanban | ✅ Done |
-| **M3 — Team & user management** | 🚧 In progress (below) |
-| M4 — Supabase (local, Docker) | — |
+| M3 — Team & user management | ✅ Done |
+| M4 — Supabase (local, Docker) | Planned when M3 is merged |
 | M5 — Emails (Resend) | — |
 | M6 — Billing (Stripe) | — |
 | M7 — AI I: task writer & breakdown | — |
@@ -10492,6 +10492,7 @@ Then confirm CI is green on the PR.
 5. The theme toggle now saves a per-user preference. The M1 e2e test toggled the shared **demo** user, which would leak into retries → the theme test uses a fresh user, waits for the save request, and checks a second browser context (a "new device").
 6. `ThemePreferenceSync` applies the saved theme once per value (ref), otherwise it would undo toggles made before the page's data refreshed.
 7. Optimistic label edits race page reloads just like the board (M2 gotcha 2) → the label list is `aria-busy` while saving and the test waits for it.
+8. Found while building (not in the dry run): with the machine under load (load average ≈ 12) a server action took longer than Playwright's default 5 s `expect` timeout → `playwright.config.ts` sets `expect: { timeout: 10_000 }`.
 
 Preventive: invite links are built from `x-forwarded-host`/`host` so they're correct behind a proxy; `/sign-out?next=` goes through `safeNextPath` so it can't become an open redirect.
 

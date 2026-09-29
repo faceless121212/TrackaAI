@@ -1,4 +1,4 @@
-import { expect, type Locator, type Page } from "@playwright/test";
+import { expect, type Browser, type Locator, type Page } from "@playwright/test";
 
 // Mirrors DEMO_USER in src/server/data/mock/seed.ts.
 export const DEMO = { email: "demo@trackaai.test", password: "demo-password" };
@@ -77,4 +77,43 @@ export async function drag(page: Page, from: Locator, to: Locator, offsetY = 60)
 /** Waits until the board has no mutation in flight (it sets aria-busy while saving). */
 export async function saved(page: Page) {
   await expect(page.locator('[data-slot="board"]')).toHaveAttribute("aria-busy", "false");
+}
+
+/** Opens a settings tab of the current team from the sidebar. */
+export async function openSettings(page: Page, tab: "General" | "Members" | "Labels" | "Profile") {
+  await page.getByRole("link", { name: "Settings", exact: true }).click();
+  await page.getByRole("navigation", { name: "Settings" }).getByRole("link", { name: tab }).click();
+  await expect(page.getByRole("link", { name: tab, exact: true })).toHaveAttribute("aria-current", "page");
+}
+
+/** Invites a fresh email from the members page; returns it with the invite link (emails arrive in M5). */
+export async function inviteTeammate(owner: Page, role: "Member" | "Admin" = "Member") {
+  await openSettings(owner, "Members");
+  const email = `mate-${uniqueId()}@example.test`;
+  await owner.getByLabel("Email addresses").fill(email);
+  if (role === "Admin") {
+    await owner.getByRole("combobox", { name: "Role" }).click();
+    await owner.getByRole("option", { name: "Admin" }).click();
+  }
+  await owner.getByRole("button", { name: "Send invites" }).click();
+  const row = owner.getByRole("listitem", { name: `Invite for ${email}` });
+  await expect(row).toBeVisible();
+  const link = await row.getByRole("button", { name: "Copy link" }).getAttribute("data-invite-link");
+  return { email, link: link! };
+}
+
+/** Opens the invite link in a new browser (signed out), signs up with the invited email and joins. */
+export async function joinWithInvite(browser: Browser, baseURL: string, invite: { email: string; link: string }) {
+  const context = await browser.newContext({ baseURL });
+  const page = await context.newPage();
+  await page.goto(invite.link);
+  await expect(page).toHaveURL(/\/sign-in\?next=%2Finvite%2F/);
+  await page.getByRole("link", { name: "Sign up" }).click();
+  await page.getByLabel("Name", { exact: true }).fill("Mate");
+  await page.getByLabel("Email", { exact: true }).fill(invite.email);
+  await page.getByLabel("Password", { exact: true }).fill("password123");
+  await page.getByRole("button", { name: "Create account" }).click();
+  await page.getByRole("button", { name: /^Join / }).click();
+  await expect(page.getByRole("heading", { name: "My tasks" })).toBeVisible();
+  return { context, page };
 }

@@ -11,7 +11,7 @@ let owner: User;
 
 beforeEach(async () => {
   repos = createMockRepositories(createMemoryStore(emptyDb()));
-  owner = await repos.auth.signUp({ name: "Owner", email: "owner@example.test", password: "password1" });
+  ({ user: owner } = await repos.auth.signUp({ name: "Owner", email: "owner@example.test", password: "password1" }));
 });
 
 async function setupBoard() {
@@ -25,7 +25,7 @@ async function setupBoard() {
 /** Signs a user up and adds them to the team through an accepted invite. */
 async function joinTeam(teamId: string, email: string) {
   const [invite] = await repos.invites.create({ teamId, emails: [email], invitedBy: owner.id });
-  const user = await repos.auth.signUp({ name: email, email, password: "password1" });
+  const { user } = await repos.auth.signUp({ name: email, email, password: "password1" });
   await repos.invites.accept(invite.token, user.id);
   return user;
 }
@@ -39,6 +39,22 @@ describe("auth", () => {
     expect(await repos.auth.signIn({ email: "owner@example.test", password: "password1" })).toEqual(owner);
     expect(await repos.auth.signIn({ email: "owner@example.test", password: "nope" })).toBeNull();
     expect(await repos.auth.signIn({ email: "ghost@example.test", password: "password1" })).toBeNull();
+  });
+
+  it("tracks the session through sign-up, sign-in and sign-out", async () => {
+    expect(await repos.auth.currentUserId()).toBe(owner.id); // beforeEach signed up
+    await repos.auth.signOut();
+    expect(await repos.auth.currentUserId()).toBeNull();
+    expect(await repos.auth.signIn({ email: "owner@example.test", password: "nope" })).toBeNull();
+    expect(await repos.auth.currentUserId()).toBeNull();
+    await repos.auth.signIn({ email: "owner@example.test", password: "password1" });
+    expect(await repos.auth.currentUserId()).toBe(owner.id);
+  });
+
+  it("signs up without an email confirmation step and ignores confirmation links", async () => {
+    const result = await repos.auth.signUp({ name: "New", email: "new-user@example.test", password: "password1" });
+    expect(result.needsConfirmation).toBe(false);
+    expect(await repos.auth.confirmEmail({ code: "anything" })).toBe(false);
   });
 
   it("rejects a duplicate email, case-insensitively", async () => {
@@ -76,7 +92,7 @@ describe("memberships", () => {
   it("changes roles and removes members", async () => {
     const { team } = await setupBoard();
     expect(await repos.memberships.setRole(team.id, owner.id, "admin")).toMatchObject({ role: "admin" });
-    const stranger = await repos.auth.signUp({ name: "S", email: "s@example.test", password: "password1" });
+    const { user: stranger } = await repos.auth.signUp({ name: "S", email: "s@example.test", password: "password1" });
     await expect(repos.memberships.setRole(team.id, stranger.id, "admin")).rejects.toBeInstanceOf(
       NotFoundError,
     );
@@ -325,7 +341,7 @@ describe("team administration", () => {
 
   it("refuses to transfer ownership to a non-member", async () => {
     const { team } = await setupBoard();
-    const stranger = await repos.auth.signUp({ name: "S", email: "s@example.test", password: "password1" });
+    const { user: stranger } = await repos.auth.signUp({ name: "S", email: "s@example.test", password: "password1" });
     await expect(repos.memberships.transferOwnership(team.id, owner.id, stranger.id)).rejects.toBeInstanceOf(
       NotFoundError,
     );
@@ -349,14 +365,26 @@ describe("invite lifecycle", () => {
   it("accepts an invite for the invited email only, once", async () => {
     const { team } = await setupBoard();
     const [invite] = await repos.invites.create({ teamId: team.id, emails: ["new@example.test"], invitedBy: owner.id });
-    const other = await repos.auth.signUp({ name: "O", email: "other@example.test", password: "password1" });
+    const { user: other } = await repos.auth.signUp({ name: "O", email: "other@example.test", password: "password1" });
     await expect(repos.invites.accept(invite.token, other.id)).rejects.toBeInstanceOf(ConflictError);
 
-    const invitee = await repos.auth.signUp({ name: "N", email: "new@example.test", password: "password1" });
+    const { user: invitee } = await repos.auth.signUp({ name: "N", email: "new@example.test", password: "password1" });
     const membership = await repos.invites.accept(invite.token, invitee.id);
     expect(membership).toMatchObject({ teamId: team.id, userId: invitee.id, role: "member" });
     expect(await repos.invites.listPending(team.id)).toEqual([]);
     await expect(repos.invites.accept(invite.token, invitee.id)).rejects.toBeInstanceOf(ConflictError);
+  });
+
+  it("previews an invite with its team and inviter for someone not in the team yet", async () => {
+    const { team } = await setupBoard();
+    const [invite] = await repos.invites.create({ teamId: team.id, emails: ["guest@example.test"], invitedBy: owner.id });
+    expect(await repos.invites.preview(invite.token)).toEqual({
+      invite,
+      teamName: "Acme",
+      teamSlug: "acme",
+      inviterName: "Owner",
+    });
+    expect(await repos.invites.preview("no-such-token")).toBeNull();
   });
 
   it("resends with a fresh token and expiry, and revokes", async () => {
@@ -373,13 +401,13 @@ describe("invite lifecycle", () => {
   it("rejects expired invites", async () => {
     const store = createMemoryStore(emptyDb());
     const local = createMockRepositories(store);
-    const boss = await local.auth.signUp({ name: "B", email: "b@example.test", password: "password1" });
+    const { user: boss } = await local.auth.signUp({ name: "B", email: "b@example.test", password: "password1" });
     const team = await local.teams.create({ name: "T", slug: "t-team", ownerId: boss.id });
     const [invite] = await local.invites.create({ teamId: team.id, emails: ["late@example.test"], invitedBy: boss.id });
     await store.write((db) => {
       db.invites[0].expiresAt = "2000-01-01T00:00:00.000Z";
     });
-    const late = await local.auth.signUp({ name: "L", email: "late@example.test", password: "password1" });
+    const { user: late } = await local.auth.signUp({ name: "L", email: "late@example.test", password: "password1" });
     await expect(local.invites.accept(invite.token, late.id)).rejects.toThrow(/expired/);
   });
 });

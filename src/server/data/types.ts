@@ -31,15 +31,29 @@ import type {
 
 export type TeamMember = Membership & { user: User };
 
+export type InvitePreview = { invite: Invite; teamName: string; teamSlug: string; inviterName: string | null };
+
 // Every backend (mock in M1, Supabase in M4) implements these. UI and server
 // actions depend only on this file, never on a concrete backend.
 // Methods throw NotFoundError / ConflictError from ./errors.
 
 export interface AuthRepo {
-  /** Creates the user and their credentials. Throws ConflictError("email") if taken. */
-  signUp(input: SignUpInput): Promise<User>;
-  /** Returns the user, or null for an unknown email or wrong password. */
+  /**
+   * Creates the user. The mock signs them in at once; Supabase (with "Confirm
+   * email" on) emails a link that lands on `redirectTo` and returns
+   * needsConfirmation. Throws ConflictError("email") if the address is taken.
+   */
+  signUp(input: SignUpInput & { redirectTo?: string }): Promise<{ user: User; needsConfirmation: boolean }>;
+  /**
+   * Signs in and returns the user, or null for an unknown email or wrong
+   * password. Throws ConflictError("email") if the email isn't confirmed yet.
+   */
   signIn(input: SignInInput): Promise<User | null>;
+  signOut(): Promise<void>;
+  /** The signed-in user's id, or null. */
+  currentUserId(): Promise<string | null>;
+  /** Completes an email-confirmation link and starts the session; false if it's invalid or expired. */
+  confirmEmail(params: { code?: string | null; tokenHash?: string | null; type?: string | null }): Promise<boolean>;
 }
 
 export interface UsersRepo {
@@ -140,6 +154,8 @@ export interface InvitesRepo {
   listPending(teamId: string): Promise<Invite[]>;
   get(id: string): Promise<Invite | null>;
   getByToken(token: string): Promise<Invite | null>;
+  /** What an invitee may see before joining (they can't read the team's tables yet). */
+  preview(token: string): Promise<InvitePreview | null>;
   /** Issues a new token and expiry (the old link stops working). */
   resend(id: string): Promise<Invite>;
   revoke(id: string): Promise<void>;

@@ -1,6 +1,10 @@
+import { existsSync } from "node:fs";
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import tsconfigPaths from "vite-tsconfig-paths";
+
+// `pnpm test:supabase` talks to the live project using the public values in .env.local.
+if (process.env.SUPABASE_INTEGRATION && existsSync(".env.local")) process.loadEnvFile(".env.local");
 
 export default defineConfig({
   plugins: [tsconfigPaths(), react()],
@@ -9,5 +13,7 @@ export default defineConfig({
     globals: true,
     setupFiles: ["./vitest.setup.ts"],
     include: ["src/**/*.test.{ts,tsx}"],
+    // Live-Supabase tests only run via `pnpm test:supabase`.
+    exclude: process.env.SUPABASE_INTEGRATION ? ["**/node_modules/**"] : ["**/node_modules/**", "**/*.integration.test.ts"],
   },
 });

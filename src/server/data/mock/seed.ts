@@ -36,7 +36,7 @@ export async function seedDb(): Promise<MockDb> {
   const store = createMemoryStore(emptyDb());
   const repos = createMockRepositories(store);
 
-  const user = await repos.auth.signUp(DEMO_USER);
+  const { user } = await repos.auth.signUp(DEMO_USER);
   const team = await repos.teams.create({ name: "Acme", slug: "acme", ownerId: user.id });
   const workspace = await repos.workspaces.create({ teamId: team.id, name: "Engineering", keyPrefix: "ENG" });
   const board = await repos.boards.create({ workspaceId: workspace.id, name: "Engineering", description: null });

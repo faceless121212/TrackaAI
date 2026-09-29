@@ -13,7 +13,7 @@ import {
   SidebarMenuItem,
   SidebarRail,
 } from "@/components/ui/sidebar";
-import { signOut } from "@/server/auth/actions";
+import { signOutAction } from "@/server/actions/auth";
 import { NAV_ITEMS } from "./nav-items";
 
 export function AppSidebar() {
@@ -60,7 +60,7 @@ export function AppSidebar() {
         </SidebarGroup>
       </SidebarContent>
       <SidebarFooter>
-        <form action={signOut}>
+        <form action={signOutAction}>
           <SidebarMenu>
             <SidebarMenuItem>
               <SidebarMenuButton type="submit" tooltip="Sign out">

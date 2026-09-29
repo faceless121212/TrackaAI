@@ -15,7 +15,7 @@ This file holds the detailed, task-level plan for the **current** milestone. Eac
 | M4 — Supabase (hosted, no Docker) | ✅ Done |
 | M5 — Emails (Resend) | ⏭️ Skipped (decision) |
 | M6 — Plans & billing (simulated) | ✅ Done |
-| M7 — AI I: task writer & breakdown | — |
+| M7 — AI I: task writer & breakdown | 🚧 In progress |
 | M8 — AI II: board copilot | — |
 | M9 — AI III: AI teammate | — |
 | M10 — Hardening & launch | — |
@@ -15381,6 +15381,27 @@ Gotchas:
 8. (Pre-PR review) Plan-limit copy is for the owner: invitees are told the team is full and to ask the owner; admins get "Ask the team owner to upgrade."
 9. Old local `.data/mock-db.json` files keep Acme on the old default; delete `.data/` to reseed (Acme is on Pro).
 
-## Next up: M7
+---
 
-AI I: task writer & breakdown (AI SDK + `@ai-sdk/anthropic`, `ai_usage` metering against the plan's `aiRuns` limit). Planned here once M6 is merged.
+# M7 — AI I: task writer & breakdown — Plan
+
+**Goal:** From a one-liner, the create-task dialog streams in a title, a description with acceptance criteria, a priority and labels, which the user edits before creating. From a task's sheet, "Break down" streams 3–8 sub-tasks to preview, pick and create in the parent's column. Every run counts toward the plan's monthly `aiRuns` limit (Free 10, Lite 100, Pro unlimited) and is logged to `ai_usage`.
+
+**Architecture:**
+- AI SDK v7 (`streamText` + `Output.object`, `useObject` on the client) with `@ai-sdk/anthropic`, model `claude-haiku-4-5` (cheap generation).
+- Two route handlers (`/api/ai/task-writer`, `/api/ai/breakdown`) check the session, board or task access and the plan limit, then stream. `onEnd` records tokens in `ai_usage`.
+- AI output is only a suggestion: nothing is saved until the user submits. Creating sub-tasks is a server action with the usual checks.
+- `AI_MOCK=1` swaps in a deterministic mock model (e2e and CI); no key → the AI buttons say AI isn't configured.
+
+**Tasks:**
+1. Domain schemas (`src/lib/domain/ai.ts`): task draft, breakdown, label matching (+ tests).
+2. `ai_usage` table + RLS (members read their team's usage, write only as themselves, never delete) + PGlite tests; `AiUsageRepo` (`record`, `countSince`) in mock and Supabase.
+3. `assertWithinPlan(…, "aiRuns")` counting this month's runs.
+4. Server AI module: model selection, prompts, streaming helpers (tested with `MockLanguageModelV4`).
+5. Route handlers with auth, access, plan checks and usage logging.
+6. UI: "Write with AI" in the create dialog (labels become selectable), "Break down" dialog and a sub-tasks list in the task sheet; `createSubtasksAction`.
+7. E2E with the mock model; one live call against Anthropic; docs; pre-PR review → PR → auto-merge.
+
+## Next up: M8
+
+Board copilot (side-panel chat with tools and confirm cards), once M7 is merged.

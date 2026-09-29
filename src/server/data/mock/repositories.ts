@@ -1,10 +1,14 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { generateKeyBetween, generateNKeysBetween } from "fractional-indexing";
+import { generateNKeysBetween } from "fractional-indexing";
 import {
   DEFAULT_COLUMNS,
+  DEFAULT_LABELS,
   INVITE_TTL_DAYS,
+  byPosition,
   formatTaskKey,
+  positionAt,
   type Column,
+  type Comment,
   type Invite,
   type Task,
   type User,
@@ -20,11 +24,6 @@ const DAY_MS = 86_400_000;
 const newId = () => randomUUID();
 const now = () => new Date().toISOString();
 
-// fractional-indexing keys compare by code unit, not locale.
-function byPosition(a: { position: string }, b: { position: string }) {
-  return a.position < b.position ? -1 : a.position > b.position ? 1 : 0;
-}
-
 function byCreatedAt(a: { createdAt: string }, b: { createdAt: string }) {
   return a.createdAt.localeCompare(b.createdAt);
 }
@@ -37,6 +36,28 @@ function find<T>(items: T[], predicate: (item: T) => boolean, entity: string, id
 
 function findColumn(db: MockDb, boardId: string, columnId: string): Column {
   return find(db.columns, (c) => c.id === columnId && c.boardId === boardId, "Column", columnId);
+}
+
+/** Sorted positions of a column's tasks, optionally leaving one task out (the one being moved). */
+function taskPositions(db: MockDb, columnId: string, excludeId?: string): string[] {
+  return db.tasks
+    .filter((t) => t.columnId === columnId && t.id !== excludeId)
+    .sort(byPosition)
+    .map((t) => t.position);
+}
+
+function deleteTasks(db: MockDb, taskIds: Set<string>) {
+  db.tasks = db.tasks.filter((t) => !taskIds.has(t.id));
+  db.comments = db.comments.filter((c) => !taskIds.has(c.taskId));
+  for (const task of db.tasks) {
+    if (task.parentId && taskIds.has(task.parentId)) task.parentId = null;
+  }
+}
+
+function deleteBoards(db: MockDb, boardIds: Set<string>) {
+  deleteTasks(db, new Set(db.tasks.filter((t) => boardIds.has(t.boardId)).map((t) => t.id)));
+  db.columns = db.columns.filter((c) => !boardIds.has(c.boardId));
+  db.boards = db.boards.filter((b) => !boardIds.has(b.id));
 }
 
 export function createMockRepositories(store: MockStore): Repositories {
@@ -82,8 +103,10 @@ export function createMockRepositories(store: MockStore): Repositories {
           const team = { id: newId(), name, slug, plan: "lite" as const, createdAt: now() };
           db.teams.push(team);
           db.memberships.push({ teamId: team.id, userId: ownerId, role: "owner", joinedAt: now() });
+          for (const label of DEFAULT_LABELS) db.labels.push({ id: newId(), teamId: team.id, ...label });
           return team;
         }),
+      get: (id) => store.read((db) => db.teams.find((t) => t.id === id) ?? null),
       getBySlug: (slug) => store.read((db) => db.teams.find((t) => t.slug === slug) ?? null),
       listForUser: (userId) =>
         store.read((db) => {
@@ -96,6 +119,16 @@ export function createMockRepositories(store: MockStore): Repositories {
       list: (teamId) => store.read((db) => db.memberships.filter((m) => m.teamId === teamId)),
       get: (teamId, userId) =>
         store.read((db) => db.memberships.find((m) => m.teamId === teamId && m.userId === userId) ?? null),
+      listMembers: (teamId) =>
+        store.read((db) =>
+          db.memberships
+            .filter((m) => m.teamId === teamId)
+            .flatMap((m) => {
+              const user = db.users.find((u) => u.id === m.userId);
+              return user ? [{ ...m, user }] : [];
+            })
+            .sort((a, b) => a.user.name.localeCompare(b.user.name)),
+        ),
       setRole: (teamId, userId, role) =>
         store.write((db) => {
           const membership = find(
@@ -127,6 +160,17 @@ export function createMockRepositories(store: MockStore): Repositories {
       get: (id) => store.read((db) => db.workspaces.find((w) => w.id === id) ?? null),
       listForTeam: (teamId) =>
         store.read((db) => db.workspaces.filter((w) => w.teamId === teamId).sort(byCreatedAt)),
+      update: (id, patch) =>
+        store.write((db) => {
+          const workspace = find(db.workspaces, (w) => w.id === id, "Workspace", id);
+          Object.assign(workspace, patch);
+          return workspace;
+        }),
+      delete: (id) =>
+        store.write((db) => {
+          deleteBoards(db, new Set(db.boards.filter((b) => b.workspaceId === id).map((b) => b.id)));
+          db.workspaces = db.workspaces.filter((w) => w.id !== id);
+        }),
     },
 
     boards: {
@@ -144,17 +188,60 @@ export function createMockRepositories(store: MockStore): Repositories {
       get: (id) => store.read((db) => db.boards.find((b) => b.id === id) ?? null),
       listForWorkspace: (workspaceId) =>
         store.read((db) => db.boards.filter((b) => b.workspaceId === workspaceId).sort(byCreatedAt)),
+      update: (id, patch) =>
+        store.write((db) => {
+          const board = find(db.boards, (b) => b.id === id, "Board", id);
+          Object.assign(board, patch);
+          return board;
+        }),
+      delete: (id) => store.write((db) => deleteBoards(db, new Set([id]))),
       listColumns: (boardId) =>
         store.read((db) => db.columns.filter((c) => c.boardId === boardId).sort(byPosition)),
+      getColumn: (id) => store.read((db) => db.columns.find((c) => c.id === id) ?? null),
+      createColumn: (boardId, name) =>
+        store.write((db) => {
+          find(db.boards, (b) => b.id === boardId, "Board", boardId);
+          const positions = db.columns.filter((c) => c.boardId === boardId).sort(byPosition).map((c) => c.position);
+          const column = { id: newId(), boardId, name, position: positionAt(positions, positions.length) };
+          db.columns.push(column);
+          return column;
+        }),
+      renameColumn: (id, name) =>
+        store.write((db) => {
+          const column = find(db.columns, (c) => c.id === id, "Column", id);
+          column.name = name;
+          return column;
+        }),
+      moveColumn: (id, index) =>
+        store.write((db) => {
+          const column = find(db.columns, (c) => c.id === id, "Column", id);
+          const others = db.columns
+            .filter((c) => c.boardId === column.boardId && c.id !== id)
+            .sort(byPosition)
+            .map((c) => c.position);
+          column.position = positionAt(others, index);
+          return column;
+        }),
+      deleteColumn: (id) =>
+        store.write((db) => {
+          const column = find(db.columns, (c) => c.id === id, "Column", id);
+          if (db.tasks.some((t) => t.columnId === id)) {
+            throw new ConflictError("column", "Move or delete this column's tasks first");
+          }
+          if (db.columns.filter((c) => c.boardId === column.boardId).length === 1) {
+            throw new ConflictError("column", "A board needs at least one column");
+          }
+          db.columns = db.columns.filter((c) => c.id !== id);
+        }),
     },
 
     tasks: {
-      create: (input) =>
+      create: ({ placement = "end", ...input }) =>
         store.write((db) => {
           const board = find(db.boards, (b) => b.id === input.boardId, "Board", input.boardId);
           const workspace = find(db.workspaces, (w) => w.id === board.workspaceId, "Workspace", board.workspaceId);
           findColumn(db, board.id, input.columnId);
-          const last = db.tasks.filter((t) => t.columnId === input.columnId).sort(byPosition).at(-1);
+          const positions = taskPositions(db, input.columnId);
           const number = workspace.nextTaskNumber++;
           const timestamp = now();
           const task: Task = {
@@ -162,13 +249,14 @@ export function createMockRepositories(store: MockStore): Repositories {
             id: newId(),
             number,
             key: formatTaskKey(workspace.keyPrefix, number),
-            position: generateKeyBetween(last?.position ?? null, null),
+            position: positionAt(positions, placement === "start" ? 0 : positions.length),
             createdAt: timestamp,
             updatedAt: timestamp,
           };
           db.tasks.push(task);
           return task;
         }),
+      get: (id) => store.read((db) => db.tasks.find((t) => t.id === id) ?? null),
       getByKey: (workspaceId, key) =>
         store.read((db) => {
           const boardIds = new Set(db.boards.filter((b) => b.workspaceId === workspaceId).map((b) => b.id));
@@ -177,18 +265,49 @@ export function createMockRepositories(store: MockStore): Repositories {
         }),
       listForBoard: (boardId) =>
         store.read((db) => db.tasks.filter((t) => t.boardId === boardId).sort(byPosition)),
+      listAssignedTo: (teamId, userId) =>
+        store.read((db) => {
+          const workspaceIds = new Set(db.workspaces.filter((w) => w.teamId === teamId).map((w) => w.id));
+          const boardIds = new Set(db.boards.filter((b) => workspaceIds.has(b.workspaceId)).map((b) => b.id));
+          return db.tasks
+            .filter((t) => boardIds.has(t.boardId) && t.assignee?.kind === "user" && t.assignee.userId === userId)
+            .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+        }),
       update: (id, patch) =>
         store.write((db) => {
           const task = find(db.tasks, (t) => t.id === id, "Task", id);
           Object.assign(task, patch, { updatedAt: now() });
           return task;
         }),
-      move: (id, { columnId, position }) =>
+      move: (id, { columnId, index }) =>
         store.write((db) => {
           const task = find(db.tasks, (t) => t.id === id, "Task", id);
           findColumn(db, task.boardId, columnId);
+          const position = positionAt(taskPositions(db, columnId, id), index);
           Object.assign(task, { columnId, position, updatedAt: now() });
           return task;
+        }),
+      delete: (id) => store.write((db) => deleteTasks(db, new Set([id]))),
+    },
+
+    labels: {
+      listForTeam: (teamId) => store.read((db) => db.labels.filter((l) => l.teamId === teamId)),
+    },
+
+    comments: {
+      listForTask: (taskId) =>
+        store.read((db) => db.comments.filter((c) => c.taskId === taskId).sort(byCreatedAt)),
+      get: (id) => store.read((db) => db.comments.find((c) => c.id === id) ?? null),
+      create: ({ taskId, body, author }) =>
+        store.write((db) => {
+          find(db.tasks, (t) => t.id === taskId, "Task", taskId);
+          const comment: Comment = { id: newId(), taskId, body, author, createdAt: now() };
+          db.comments.push(comment);
+          return comment;
+        }),
+      delete: (id) =>
+        store.write((db) => {
+          db.comments = db.comments.filter((c) => c.id !== id);
         }),
     },
 

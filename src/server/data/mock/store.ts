@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { MockDb } from "./db";
+import { emptyDb, type MockDb } from "./db";
 
 /**
  * All mock-backend access goes through `read` / `write`. A `write` callback
@@ -49,7 +49,8 @@ export function createFileStore(filePath: string, seed: () => MockDb | Promise<M
 
   async function load(): Promise<MockDb> {
     try {
-      return JSON.parse(await readFile(filePath, "utf8")) as MockDb;
+      // Files written by an older milestone lack newer collections; default them.
+      return { ...emptyDb(), ...(JSON.parse(await readFile(filePath, "utf8")) as Partial<MockDb>) };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       const db = await seed();

@@ -4,7 +4,6 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-
 import { CSS } from "@dnd-kit/utilities";
 import { Ellipsis, GripVertical, Plus } from "lucide-react";
 import { useState, type ReactNode } from "react";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -15,6 +14,7 @@ import {
 import type { Column } from "@/lib/domain";
 import { cn } from "@/lib/utils";
 import { InlineInput } from "./inline-input";
+import { StatusIcon } from "./status-icon";
 
 type BoardColumnProps = {
   column: Column;
@@ -61,21 +61,24 @@ export function BoardColumn({
       aria-label={column.name}
       aria-busy={isDraft}
       style={{ transform: CSS.Translate.toString(transform), transition }}
-      className={cn("bg-muted/40 flex w-72 shrink-0 flex-col rounded-lg border", isDragging && "opacity-50")}
+      // Linear's columns have no box: just a header and a stack of cards.
+      className={cn("group/column flex w-[300px] shrink-0 flex-col", isDragging && "opacity-50")}
     >
-      <header className="flex items-center gap-1.5 px-2 pt-2 pb-1">
+      <header className="relative flex h-9 items-center gap-2 pr-0.5 pl-1">
         {canEdit && (
           <button
             ref={setActivatorNodeRef}
             type="button"
             aria-label={`Reorder ${column.name}`}
-            className="text-muted-foreground hover:text-foreground cursor-grab touch-none"
+            // Out of the flow so the header lines up like Linear's; shown on hover/focus, always on touch.
+            className="text-muted-foreground hover:text-foreground absolute top-1/2 -left-3.5 -translate-y-1/2 cursor-grab touch-none opacity-0 group-hover/column:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
             {...attributes}
             {...listeners}
           >
-            <GripVertical className="size-4" />
+            <GripVertical className="size-3.5" />
           </button>
         )}
+        <StatusIcon columnName={column.name} />
         {renaming ? (
           <InlineInput
             aria-label="Column name"
@@ -89,26 +92,26 @@ export function BoardColumn({
             onCancel={() => setRenaming(false)}
           />
         ) : (
-          <h2 className="truncate text-sm font-medium">{column.name}</h2>
+          <h2 className="text-foreground/90 truncate text-xs font-medium">{column.name}</h2>
         )}
-        <Badge variant="secondary">{taskIds.length}</Badge>
-        <div className="ml-auto flex items-center">
+        <span className="text-muted-foreground text-xs tabular-nums">{taskIds.length}</span>
+        <div className="text-muted-foreground ml-auto flex items-center">
           {!isDraft && (
             <Button
               variant="ghost"
               size="icon"
-              className="size-7"
+              className="size-6"
               aria-label={`Add task to ${column.name}`}
               onClick={() => setAdding(true)}
             >
-              <Plus />
+              <Plus className="size-3.5" />
             </Button>
           )}
           {canEdit && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" className="size-7" aria-label={`Column actions for ${column.name}`}>
-                  <Ellipsis />
+                <Button variant="ghost" size="icon" className="size-6" aria-label={`Column actions for ${column.name}`}>
+                  <Ellipsis className="size-3.5" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
@@ -122,7 +125,7 @@ export function BoardColumn({
         </div>
       </header>
       {adding && (
-        <div className="px-2 pt-1">
+        <div className="pb-2">
           <InlineInput
             aria-label={`New task in ${column.name}`}
             placeholder="Task title, then Enter"
@@ -133,10 +136,10 @@ export function BoardColumn({
         </div>
       )}
       <SortableContext items={taskIds} strategy={verticalListSortingStrategy}>
-        <div className="flex min-h-24 flex-1 flex-col gap-2 overflow-y-auto p-2">
+        <div className="flex min-h-24 flex-1 flex-col gap-2 overflow-y-auto pb-2">
           {taskIds.map(renderTask)}
           {taskIds.length === 0 && (
-            <p className="text-muted-foreground py-6 text-center text-xs">
+            <p className="text-muted-foreground border-border/60 rounded-[9px] border border-dashed py-6 text-center text-xs">
               {filtered && taskCount > 0 ? "No matching tasks" : "No tasks"}
             </p>
           )}
@@ -149,7 +152,7 @@ export function BoardColumn({
 export function AddColumn({ onAdd }: { onAdd: (name: string) => void }) {
   const [open, setOpen] = useState(false);
   return (
-    <div className="w-72 shrink-0">
+    <div className="w-[300px] shrink-0 pt-1">
       {open ? (
         <InlineInput
           aria-label="New column name"

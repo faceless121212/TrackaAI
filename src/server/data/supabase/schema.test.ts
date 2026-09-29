@@ -693,10 +693,17 @@ describe("AI usage", () => {
     expect(await one(db, "select input_tokens from ai_usage where id = $1", [run.id])).toEqual({ input_tokens: 120 });
   });
 
+  it("accepts copilot runs and rejects unknown features", async () => {
+    await asUser(db, b.owner, (tx) => tx.query("select start_ai_run($1, 'copilot', 'm')", [b.team]));
+    await expect(
+      asUser(db, b.owner, (tx) => tx.query("select start_ai_run($1, 'poetry', 'm')", [b.team])),
+    ).rejects.toThrow(/check constraint/);
+  });
+
   it("only lets members start runs, and reads stay inside the team", async () => {
     await expect(startRun(a.owner, b.team)).rejects.toThrow(/forbidden/);
     expect(await asUser(db, a.owner, (tx) => count(tx, `ai_usage where team_id = '${b.team}'`))).toBe(0);
-    expect(await asUser(db, b.owner, (tx) => count(tx, `ai_usage where team_id = '${b.team}'`))).toBe(1);
+    expect(await asUser(db, b.owner, (tx) => count(tx, `ai_usage where team_id = '${b.team}'`))).toBe(2);
   });
 
   it("never lets anyone write, edit or erase usage directly", async () => {

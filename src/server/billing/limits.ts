@@ -1,4 +1,4 @@
-import { canAdd, type PlanResource, type Team } from "@/lib/domain";
+import { canAdd, monthStart, type PlanResource, type Team } from "@/lib/domain";
 import { PlanLimitError } from "@/server/data/errors";
 import type { Repositories } from "@/server/data/types";
 
@@ -14,11 +14,6 @@ export async function assertWithinPlan(
 ): Promise<void> {
   const used = await currentUse(repos, team.id, resource);
   if (!canAdd(team.plan, resource, used, adding)) throw new PlanLimitError(team.plan, resource);
-}
-
-/** The first moment of the current calendar month (UTC): AI runs reset then. */
-export function monthStart(now = new Date()): Date {
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
 }
 
 async function currentUse(repos: Repositories, teamId: string, resource: PlanResource): Promise<number> {

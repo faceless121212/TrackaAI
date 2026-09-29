@@ -3,7 +3,11 @@ import type { z } from "zod";
 
 export type TokenUsage = { inputTokens: number; outputTokens: number };
 
-/** Streams an object matching `schema`. Stream errors are logged; the client sees a failed stream. */
+/**
+ * Streams an object matching `schema`. Errors are logged; the text stream just
+ * ends early, so the client finds the object incomplete or invalid (useObject's
+ * onFinish reports that).
+ */
 export function streamStructured<T extends z.ZodType>(options: {
   model: LanguageModel;
   schema: T;

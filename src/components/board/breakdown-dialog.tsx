@@ -22,13 +22,22 @@ export function BreakdownButton({ task }: { task: Pick<Task, "id" | "key" | "tit
   const [open, setOpen] = useState(false);
   const [unchecked, setUnchecked] = useState<Set<number>>(new Set());
   const [creating, startCreating] = useTransition();
-  const breakdown = useObject({ api: "/api/ai/breakdown", schema: breakdownSchema });
+  // A stream that ended early or returned an invalid list (useObject only reports HTTP errors).
+  const [incomplete, setIncomplete] = useState<Error>();
+  const breakdown = useObject({
+    api: "/api/ai/breakdown",
+    schema: breakdownSchema,
+    onFinish: ({ object }) => setIncomplete(object ? undefined : new Error("incomplete")),
+  });
   const run = () => {
+    if (breakdown.isLoading) return;
     setUnchecked(new Set());
+    setIncomplete(undefined);
     void breakdown.submit({ taskId: task.id });
   };
 
-  const suggestions = (breakdown.object?.subtasks ?? []).filter((s) => s?.title);
+  // Partial output is only shown while streaming; a failed run shows nothing to create.
+  const suggestions = incomplete ? [] : (breakdown.object?.subtasks ?? []).filter((s) => s?.title);
   const picked = breakdown.isLoading ? [] : suggestions.filter((_, i) => !unchecked.has(i));
 
   const create = () =>
@@ -69,7 +78,8 @@ export function BreakdownButton({ task }: { task: Pick<Task, "id" | "key" | "tit
           <DialogHeader>
             <DialogTitle>Break down {task.key}</DialogTitle>
             <DialogDescription>
-              Pick the sub-tasks to create. They go in the same column as {task.key}.
+              Pick the sub-tasks to create. They go in the same column as {task.key}. Each suggestion uses one of
+              your team&apos;s monthly AI runs.
             </DialogDescription>
           </DialogHeader>
           <ul aria-label="Suggested sub-tasks" aria-busy={breakdown.isLoading} className="space-y-1">
@@ -101,13 +111,15 @@ export function BreakdownButton({ task }: { task: Pick<Task, "id" | "key" | "tit
             ))}
             {breakdown.isLoading && <li className="text-muted-foreground p-2 text-sm">Thinking…</li>}
           </ul>
-          <AiError error={breakdown.error} />
+          <AiError error={breakdown.error ?? incomplete} />
           <DialogFooter>
             <Button variant="ghost" onClick={run} disabled={breakdown.isLoading || creating}>
               Try again
             </Button>
             <Button onClick={create} disabled={picked.length === 0 || creating}>
-              Create {picked.length || ""} sub-task{picked.length === 1 ? "" : "s"}
+              {picked.length === 0
+                ? "Create sub-tasks"
+                : `Create ${picked.length} sub-task${picked.length === 1 ? "" : "s"}`}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -115,3 +115,8 @@ export function planFeatures(plan: Plan): { label: string; included: boolean }[]
     { label: "AI teammate", included: features.aiTeammate },
   ];
 }
+
+/** The first moment of the current calendar month (UTC): AI runs reset then. */
+export function monthStart(now = new Date()): Date {
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+}

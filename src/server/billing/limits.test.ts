@@ -5,7 +5,8 @@ import { emptyDb } from "@/server/data/mock/db";
 import { createMockRepositories } from "@/server/data/mock/repositories";
 import { createMemoryStore } from "@/server/data/mock/store";
 import type { Repositories } from "@/server/data/types";
-import { assertSeatToJoin, assertWithinPlan, countNewInvitees, monthStart } from "./limits";
+import { monthStart } from "@/lib/domain";
+import { assertSeatToJoin, assertWithinPlan, countNewInvitees } from "./limits";
 
 let repos: Repositories;
 let owner: User;
@@ -46,10 +47,10 @@ describe("assertWithinPlan", () => {
 
 describe("AI runs", () => {
   it("allows the plan's runs this month, then asks to upgrade", async () => {
-    const run = { teamId: team.id, userId: owner.id, feature: "task_writer" as const, model: "m", inputTokens: 1, outputTokens: 1 };
-    for (let i = 0; i < 9; i++) await repos.aiUsage.record(run);
+    const run = { teamId: team.id, userId: owner.id, feature: "task_writer" as const, model: "m" };
+    for (let i = 0; i < 9; i++) await repos.aiUsage.startRun(run);
     await assertWithinPlan(repos, team, "aiRuns");
-    await repos.aiUsage.record(run);
+    await repos.aiUsage.startRun(run);
     const error = await assertWithinPlan(repos, team, "aiRuns").catch((e: unknown) => e);
     expect(error).toMatchObject({ plan: "free", resource: "aiRuns", message: expect.stringContaining("Lite") });
     await onPlan("pro");

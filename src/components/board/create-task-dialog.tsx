@@ -62,11 +62,16 @@ function CreateTaskForm({
   const [draftVersion, setDraftVersion] = useState(0);
 
   const [request, setRequest] = useState("");
+  // A stream that ended early or with an invalid draft (useObject only reports HTTP errors).
+  const [incomplete, setIncomplete] = useState<Error>();
   const writer = useObject({
     api: "/api/ai/task-writer",
     schema: taskDraftSchema,
     onFinish: ({ object }) => {
-      if (!object) return;
+      if (!object) {
+        setIncomplete(new Error("incomplete"));
+        return;
+      }
       setTitle(object.title);
       setDescription(object.description);
       setPriority(object.priority);
@@ -76,7 +81,9 @@ function CreateTaskForm({
   });
   const writing = writer.isLoading;
   const write = () => {
-    if (request.trim()) void writer.submit({ boardId, prompt: request });
+    if (writing || !request.trim()) return;
+    setIncomplete(undefined);
+    void writer.submit({ boardId, prompt: request });
   };
 
   return (
@@ -99,7 +106,7 @@ function CreateTaskForm({
               onChange={(event) => setRequest(event.target.value)}
               onKeyDown={(event) => {
                 // Enter drafts the task instead of submitting the form.
-                if (event.key === "Enter") {
+                if (event.key === "Enter" && !event.nativeEvent.isComposing) {
                   event.preventDefault();
                   write();
                 }
@@ -110,7 +117,7 @@ function CreateTaskForm({
               {writing ? "Writing…" : "Write"}
             </Button>
           </div>
-          <AiError error={writer.error} />
+          <AiError error={writer.error ?? incomplete} />
         </Field>
       )}
 
@@ -152,7 +159,8 @@ function CreateTaskForm({
             key={draftVersion}
             name="priority"
             label="Priority"
-            defaultValue={state.values?.priority || priority}
+            // A draft wins over the value echoed back by a failed submit.
+            defaultValue={draftVersion > 0 ? priority : state.values?.priority || priority}
             options={PRIORITIES.map((p) => ({ value: p, label: PRIORITY_META[p].label }))}
           />
           <SelectField

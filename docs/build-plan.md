@@ -15389,9 +15389,9 @@ Gotchas:
 
 **Architecture:**
 - AI SDK v7 (`streamText` + `Output.object`, `useObject` on the client) with `@ai-sdk/anthropic`, model `claude-haiku-4-5` (cheap generation).
-- Two route handlers (`/api/ai/task-writer`, `/api/ai/breakdown`) check the session, board or task access and the plan limit, then stream. `onEnd` records tokens in `ai_usage`.
+- Two route handlers (`/api/ai/task-writer`, `/api/ai/breakdown`) check the session, board or task access and the plan limit, reserve the run (`start_ai_run`), then stream; `after()` fills in the tokens (`finish_ai_run`).
 - AI output is only a suggestion: nothing is saved until the user submits. Creating sub-tasks is a server action with the usual checks.
-- `AI_MOCK=1` swaps in a deterministic mock model (e2e and CI); no key → the AI buttons say AI isn't configured.
+- `AI_MOCK=1` swaps in a deterministic mock model (e2e and CI); no key → the AI buttons are hidden.
 
 **Tasks:**
 1. Domain schemas (`src/lib/domain/ai.ts`): task draft, breakdown, label matching (+ tests).
@@ -15409,9 +15409,12 @@ Shipped as planned. Verified live against Anthropic (a task draft with acceptanc
 Gotchas:
 1. AI SDK v7 replaced `streamObject` with `streamText({ output: Output.object(...) })`, and `system` with `instructions`; `useObject` still reads a plain text stream (`createTextStreamResponse` + `toTextStream`).
 2. `useObject` reports a failed response by throwing its body text, so the routes answer failures as JSON (`{ error, upgradeHref }`) and the client parses it to show "See plans" when the month's AI runs are used up.
-3. Usage is recorded in `after()`, once the stream has finished: route-handler `after` callbacks can still use cookies, which the Supabase client needs.
+3. Tokens are recorded in `after()`, once the stream has finished: route-handler `after` callbacks can still use cookies, which the Supabase client needs. After a client abort, `totalUsage` still drains the model stream, so aborted runs are metered too (don't pass `request.signal` to the model without changing this).
 4. Proxy's matcher skips `/api`, so the AI routes rely on the guards (`notFound()`/`redirect()` work in route handlers).
-5. The limit is checked before a run starts, so simultaneous runs can go a run or two over the monthly limit. That's accepted: it's a soft limit on cost, not a security boundary.
+5. (Pre-PR review) Logging a run only after it finished let parallel requests all pass the monthly check, and letting members insert `ai_usage` rows let one member use up the team's runs → runs are reserved up front by `start_ai_run()` (counts this month under the team row lock, raises `plan_limit_reached`), tokens are written once by `finish_ai_run()`, and direct inserts are revoked.
+6. (Pre-PR review) `toTextStream` drops error parts, so a failed model call ends the HTTP stream normally and `useObject` sets no error → both dialogs treat an invalid final object (`onFinish` without `object`) as a failure and say so, and the breakdown hides partial suggestions.
+7. The dev server keeps the repositories on `globalThis` across hot reloads, so a changed repository interface needs a dev-server restart.
+8. Known limitation: sub-tasks are created one by one; if one fails midway, the ones before it stay.
 
 ## Next up: M8
 

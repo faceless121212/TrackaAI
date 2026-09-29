@@ -45,3 +45,31 @@ test("breaking a task down creates the picked sub-tasks in its column", async ({
   await page.keyboard.press("Escape");
   await expect(column(page, "Todo").getByRole("article")).toHaveCount(3);
 });
+
+test("an invalid draft shows an error instead of filling the form", async ({ page }) => {
+  await openFreshBoard(page);
+  await page.keyboard.press("c");
+  const dialog = page.getByRole("dialog", { name: "New task" });
+  await dialog.getByLabel("Write with AI").fill("invalid");
+  await dialog.getByRole("button", { name: "Write", exact: true }).click();
+  await expect(dialog.getByText("The AI couldn't finish. Please try again.")).toBeVisible();
+  await expect(dialog.getByLabel("Title", { exact: true })).toHaveValue("");
+});
+
+test("a Free team gets 10 AI runs a month, then is pointed to the plans", async ({ page }) => {
+  await openFreshBoard(page);
+  await page.keyboard.press("c");
+  const dialog = page.getByRole("dialog", { name: "New task" });
+  const write = dialog.getByRole("button", { name: "Write", exact: true });
+  for (let run = 1; run <= 10; run++) {
+    await dialog.getByLabel("Write with AI").fill(`idea ${run}`);
+    await write.click();
+    await expect(dialog.getByLabel("Title", { exact: true })).toHaveValue(`Draft: idea ${run}`);
+  }
+  await dialog.getByLabel("Write with AI").fill("one more");
+  await write.click();
+  await expect(dialog.getByText(/The Free plan includes up to 10 AI runs a month\. Upgrade to Lite/)).toBeVisible();
+  await dialog.getByRole("link", { name: "See plans" }).click();
+  await expect(page.getByText("AI runs this month")).toBeVisible();
+  await expect(page.getByText("10 of 10")).toBeVisible();
+});

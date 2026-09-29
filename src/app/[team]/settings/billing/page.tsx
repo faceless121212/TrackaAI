@@ -6,7 +6,7 @@ import { SettingsSection } from "@/components/settings/settings-section";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { PLAN_CATALOG, PLANS, compareTiers, limitFor, planSchema, type Plan } from "@/lib/domain";
+import { PLAN_CATALOG, PLANS, compareTiers, limitFor, monthStart, planSchema, type Plan } from "@/lib/domain";
 import { checkoutPath } from "@/lib/paths";
 import { requireTeamMember } from "@/server/auth/guards";
 import { can } from "@/server/auth/permissions";
@@ -29,7 +29,11 @@ function Meter({ label, used, limit }: { label: string; used: number; limit: num
 export default async function BillingPage({ params, searchParams }: PageProps<"/[team]/settings/billing">) {
   const { team, membership } = await requireTeamMember((await params).team);
   const { upgraded } = await searchParams;
-  const usage = await getRepositories().teams.usage(team.id);
+  const repos = getRepositories();
+  const [usage, aiRuns] = await Promise.all([
+    repos.teams.usage(team.id),
+    repos.aiUsage.countSince(team.id, monthStart()),
+  ]);
   const seats = usage.members + usage.pendingInvites;
   const canManage = can(membership.role, "billing:manage");
   const justUpgraded = planSchema.safeParse(upgraded);
@@ -94,6 +98,7 @@ export default async function BillingPage({ params, searchParams }: PageProps<"/
         <div className="space-y-4">
           <Meter label="People" used={seats} limit={limitFor(team.plan, "members")} />
           <Meter label="Workspaces" used={usage.workspaces} limit={limitFor(team.plan, "workspaces")} />
+          <Meter label="AI runs this month" used={aiRuns} limit={limitFor(team.plan, "aiRuns")} />
         </div>
       </SettingsSection>
       <section className="space-y-3">

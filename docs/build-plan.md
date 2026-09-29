@@ -9,7 +9,7 @@ This file holds the detailed, task-level plan for the **current** milestone. Eac
 | Milestone | Status |
 |---|---|
 | M0 — Foundation | ✅ Done |
-| **M1 — Mock data layer + onboarding** | 📝 Planned (below) — awaiting review |
+| M1 — Mock data layer + onboarding | ✅ Done |
 | M2 — Workspaces, boards & Kanban | Planned when M1 is merged |
 | M3 — Team & user management | — |
 | M4 — Supabase (local, Docker) | — |

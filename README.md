@@ -13,6 +13,10 @@ pnpm install
 pnpm dev
 ```
 
+### Plans
+
+Teams start on **Free** (just you, 1 workspace); **Lite** allows 3 people and 10 workspaces; **Pro** is unlimited. Billing is simulated: the owner upgrades from **Settings → Billing** through a test checkout, and nothing is charged. Limits live in `src/lib/domain/plans.ts` and are enforced by the server actions and by the database. The seeded demo team is on Pro.
+
 ### Data backends
 
 - **Mock** (`DATA_BACKEND=mock`, default): a JSON file at `.data/mock-db.json`, seeded on first run with `demo@trackaai.test` / `demo-password`; delete `.data/` to reset. CI and the e2e suite use this.

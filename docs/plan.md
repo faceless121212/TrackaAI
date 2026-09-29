@@ -57,14 +57,12 @@ No Docker: a hosted Supabase project (free plan), managed through the **Supabase
 ## M5 — Emails (Resend) — skipped
 Skipped by decision (2026-09-29). Invites use the members page's **Copy link** (and a server log line); Supabase's built-in mailer sends the sign-up confirmation emails. `deliverInvites()` is the single seam if email is added later. Before launch, configure a real SMTP provider in Supabase Auth.
 
-## M6 — Billing (Stripe)
-- Products/prices for Lite & Pro (monthly/yearly) created via **Stripe MCP** in test mode.
-- Checkout, Customer Portal, `/api/webhooks/stripe` (signature-verified, idempotent) → `subscriptions` table + `team.plan`.
-- Trial on team creation; plan-limit enforcement helper (`assertWithinPlan`) used by members, workspaces, AI.
-- Billing settings page; upgrade prompts on limits.
-- Local webhooks via `stripe listen`.
-
-**Done when:** test-card upgrade/downgrade/cancel flows sync correctly; limits enforced.
+## M6 — Plans & billing (simulated) ✅
+Real Stripe was skipped by decision (2026-09-29): billing is **simulated**, and nothing is charged.
+- Plans: **Free** (just you, 1 workspace), **Lite** (3 people, 10 workspaces), **Pro** (unlimited). The catalog lives in `src/lib/domain/plans.ts`.
+- Limits are enforced in `assertWithinPlan` (server actions) and in Postgres triggers, so the API can't be used to skip them.
+- Public `/pricing` page; billing settings page with usage; owner-only simulated checkout (upgrade) and downgrade; upgrade prompts where limits block.
+- Swapping in Stripe later: Checkout replaces the simulated checkout page, and a signed webhook calls `set_team_plan` with the service role instead of the owner.
 
 ## M7 — AI I: Task writer & breakdown
 - AI SDK + `@ai-sdk/anthropic`; `ai_usage` metering.

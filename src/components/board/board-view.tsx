@@ -51,6 +51,7 @@ import { BoardToolbar } from "./board-toolbar";
 import { CreateTaskDialog } from "./create-task-dialog";
 import { SortableTaskCard, TaskCardView } from "./task-card";
 import { TaskSheet } from "./task-sheet";
+import { useBoardRealtime, type RealtimeConfig } from "./use-board-realtime";
 
 export type BoardViewProps = {
   board: Board;
@@ -64,6 +65,8 @@ export type BoardViewProps = {
   currentUserId: string;
   canManage: boolean;
   canModerate: boolean;
+  /** Supabase Realtime settings, or null on the mock backend. */
+  realtime: RealtimeConfig;
 };
 
 function isTyping(target: EventTarget | null) {
@@ -76,6 +79,7 @@ export function BoardView(props: BoardViewProps) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
+  useBoardRealtime(board.id, props.realtime);
   const [tasks, applyTask] = useOptimistic(props.tasks, taskReducer);
   const [columns, applyColumn] = useOptimistic(props.columns, columnReducer);
   const [createOpen, setCreateOpen] = useState(false);

@@ -22,6 +22,14 @@ async function setupBoard() {
   return { team, workspace, board, columns };
 }
 
+/** Signs a user up and adds them to the team through an accepted invite. */
+async function joinTeam(teamId: string, email: string) {
+  const [invite] = await repos.invites.create({ teamId, emails: [email], invitedBy: owner.id });
+  const user = await repos.auth.signUp({ name: email, email, password: "password1" });
+  await repos.invites.accept(invite.token, user.id);
+  return user;
+}
+
 function taskInput(boardId: string, columnId: string, title: string) {
   return { ...createTaskInputSchema.parse({ boardId, columnId, title }), createdBy: owner.id };
 }
@@ -272,5 +280,132 @@ describe("invites", () => {
     const again = await repos.invites.create({ teamId: team.id, emails: ["a@example.test"], invitedBy: owner.id });
     expect(again).toEqual([]);
     expect(await repos.invites.listPending(team.id)).toEqual([invite]);
+  });
+});
+
+describe("profiles", () => {
+  it("updates name, avatar and theme", async () => {
+    const updated = await repos.users.update(owner.id, {
+      name: "Owner Two",
+      avatarUrl: "https://example.test/a.png",
+      theme: "light",
+    });
+    expect(updated).toMatchObject({ name: "Owner Two", avatarUrl: "https://example.test/a.png", theme: "light" });
+    expect(await repos.users.getById(owner.id)).toEqual(updated);
+  });
+});
+
+describe("team administration", () => {
+  it("renames a team", async () => {
+    const { team } = await setupBoard();
+    expect(await repos.teams.update(team.id, { name: "Acme Corp" })).toMatchObject({ name: "Acme Corp", slug: "acme" });
+  });
+
+  it("deleting a team removes everything in it", async () => {
+    const { team, workspace, board, columns } = await setupBoard();
+    const task = await repos.tasks.create(taskInput(board.id, columns[0].id, "Gone"));
+    await repos.invites.create({ teamId: team.id, emails: ["x@example.test"], invitedBy: owner.id });
+    await repos.teams.delete(team.id);
+    expect(await repos.teams.get(team.id)).toBeNull();
+    expect(await repos.workspaces.get(workspace.id)).toBeNull();
+    expect(await repos.tasks.get(task.id)).toBeNull();
+    expect(await repos.memberships.list(team.id)).toEqual([]);
+    expect(await repos.labels.listForTeam(team.id)).toEqual([]);
+    expect(await repos.invites.listPending(team.id)).toEqual([]);
+    expect(await repos.teams.listForUser(owner.id)).toEqual([]);
+  });
+
+  it("transfers ownership so there is always exactly one owner", async () => {
+    const { team } = await setupBoard();
+    const member = await joinTeam(team.id, "m@example.test");
+    await repos.memberships.transferOwnership(team.id, owner.id, member.id);
+    const roles = Object.fromEntries((await repos.memberships.list(team.id)).map((m) => [m.userId, m.role]));
+    expect(roles).toEqual({ [owner.id]: "admin", [member.id]: "owner" });
+  });
+
+  it("refuses to transfer ownership to a non-member", async () => {
+    const { team } = await setupBoard();
+    const stranger = await repos.auth.signUp({ name: "S", email: "s@example.test", password: "password1" });
+    await expect(repos.memberships.transferOwnership(team.id, owner.id, stranger.id)).rejects.toBeInstanceOf(
+      NotFoundError,
+    );
+  });
+});
+
+describe("invite lifecycle", () => {
+  it("creates invites with a role and finds them by token", async () => {
+    const { team } = await setupBoard();
+    const [invite] = await repos.invites.create({
+      teamId: team.id,
+      emails: ["lead@example.test"],
+      role: "admin",
+      invitedBy: owner.id,
+    });
+    expect(invite.role).toBe("admin");
+    expect(await repos.invites.getByToken(invite.token)).toEqual(invite);
+    expect(await repos.invites.get(invite.id)).toEqual(invite);
+  });
+
+  it("accepts an invite for the invited email only, once", async () => {
+    const { team } = await setupBoard();
+    const [invite] = await repos.invites.create({ teamId: team.id, emails: ["new@example.test"], invitedBy: owner.id });
+    const other = await repos.auth.signUp({ name: "O", email: "other@example.test", password: "password1" });
+    await expect(repos.invites.accept(invite.token, other.id)).rejects.toBeInstanceOf(ConflictError);
+
+    const invitee = await repos.auth.signUp({ name: "N", email: "new@example.test", password: "password1" });
+    const membership = await repos.invites.accept(invite.token, invitee.id);
+    expect(membership).toMatchObject({ teamId: team.id, userId: invitee.id, role: "member" });
+    expect(await repos.invites.listPending(team.id)).toEqual([]);
+    await expect(repos.invites.accept(invite.token, invitee.id)).rejects.toBeInstanceOf(ConflictError);
+  });
+
+  it("resends with a fresh token and expiry, and revokes", async () => {
+    const { team } = await setupBoard();
+    const [invite] = await repos.invites.create({ teamId: team.id, emails: ["r@example.test"], invitedBy: owner.id });
+    const resent = await repos.invites.resend(invite.id);
+    expect(resent.token).not.toBe(invite.token);
+    expect(await repos.invites.getByToken(invite.token)).toBeNull();
+    expect(resent.expiresAt >= invite.expiresAt).toBe(true);
+    await repos.invites.revoke(invite.id);
+    expect(await repos.invites.listPending(team.id)).toEqual([]);
+  });
+
+  it("rejects expired invites", async () => {
+    const store = createMemoryStore(emptyDb());
+    const local = createMockRepositories(store);
+    const boss = await local.auth.signUp({ name: "B", email: "b@example.test", password: "password1" });
+    const team = await local.teams.create({ name: "T", slug: "t-team", ownerId: boss.id });
+    const [invite] = await local.invites.create({ teamId: team.id, emails: ["late@example.test"], invitedBy: boss.id });
+    await store.write((db) => {
+      db.invites[0].expiresAt = "2000-01-01T00:00:00.000Z";
+    });
+    const late = await local.auth.signUp({ name: "L", email: "late@example.test", password: "password1" });
+    await expect(local.invites.accept(invite.token, late.id)).rejects.toThrow(/expired/);
+  });
+});
+
+describe("label management", () => {
+  it("creates, renames, recolours and deletes labels, removing them from tasks", async () => {
+    const { team, board, columns } = await setupBoard();
+    const label = await repos.labels.create(team.id, { name: "Ops", color: "green" });
+    expect(await repos.labels.get(label.id)).toEqual(label);
+    await expect(repos.labels.create(team.id, { name: "ops", color: "red" })).rejects.toBeInstanceOf(ConflictError);
+
+    expect(await repos.labels.update(label.id, { name: "Infra", color: "orange" })).toMatchObject({
+      name: "Infra",
+      color: "orange",
+    });
+    const task = await repos.tasks.create({ ...taskInput(board.id, columns[0].id, "Tagged"), labelIds: [label.id] });
+    await repos.labels.delete(label.id);
+    expect(await repos.labels.get(label.id)).toBeNull();
+    expect((await repos.tasks.get(task.id))?.labelIds).toEqual([]);
+  });
+
+  it("refuses to rename a label onto another label's name", async () => {
+    const { team } = await setupBoard();
+    const [bug, feature] = await repos.labels.listForTeam(team.id);
+    await expect(repos.labels.update(feature.id, { name: bug.name.toUpperCase() })).rejects.toBeInstanceOf(
+      ConflictError,
+    );
   });
 });

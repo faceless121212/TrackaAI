@@ -10,6 +10,7 @@ import {
   type Column,
   type Comment,
   type Invite,
+  type Membership,
   type Task,
   type User,
 } from "@/lib/domain";
@@ -54,6 +55,17 @@ function deleteTasks(db: MockDb, taskIds: Set<string>) {
   }
 }
 
+function inviteExpiry(from: Date) {
+  return new Date(from.getTime() + INVITE_TTL_DAYS * DAY_MS).toISOString();
+}
+
+function assertUniqueLabelName(db: MockDb, teamId: string, name: string, exceptId?: string) {
+  const taken = db.labels.some(
+    (l) => l.teamId === teamId && l.id !== exceptId && l.name.toLowerCase() === name.toLowerCase(),
+  );
+  if (taken) throw new ConflictError("name", "A label with this name already exists");
+}
+
 function deleteBoards(db: MockDb, boardIds: Set<string>) {
   deleteTasks(db, new Set(db.tasks.filter((t) => boardIds.has(t.boardId)).map((t) => t.id)));
   db.columns = db.columns.filter((c) => !boardIds.has(c.boardId));
@@ -92,6 +104,12 @@ export function createMockRepositories(store: MockStore): Repositories {
       getById: (id) => store.read((db) => db.users.find((u) => u.id === id) ?? null),
       getByEmail: (email) =>
         store.read((db) => db.users.find((u) => u.email === email.toLowerCase()) ?? null),
+      update: (id, patch) =>
+        store.write((db) => {
+          const user = find(db.users, (u) => u.id === id, "User", id);
+          Object.assign(user, patch);
+          return user;
+        }),
     },
 
     teams: {
@@ -112,6 +130,22 @@ export function createMockRepositories(store: MockStore): Repositories {
         store.read((db) => {
           const teamIds = new Set(db.memberships.filter((m) => m.userId === userId).map((m) => m.teamId));
           return db.teams.filter((t) => teamIds.has(t.id)).sort((a, b) => a.name.localeCompare(b.name));
+        }),
+      update: (id, patch) =>
+        store.write((db) => {
+          const team = find(db.teams, (t) => t.id === id, "Team", id);
+          Object.assign(team, patch);
+          return team;
+        }),
+      delete: (id) =>
+        store.write((db) => {
+          const workspaceIds = new Set(db.workspaces.filter((w) => w.teamId === id).map((w) => w.id));
+          deleteBoards(db, new Set(db.boards.filter((b) => workspaceIds.has(b.workspaceId)).map((b) => b.id)));
+          db.workspaces = db.workspaces.filter((w) => w.teamId !== id);
+          db.labels = db.labels.filter((l) => l.teamId !== id);
+          db.invites = db.invites.filter((i) => i.teamId !== id);
+          db.memberships = db.memberships.filter((m) => m.teamId !== id);
+          db.teams = db.teams.filter((t) => t.id !== id);
         }),
     },
 
@@ -143,6 +177,16 @@ export function createMockRepositories(store: MockStore): Repositories {
       remove: (teamId, userId) =>
         store.write((db) => {
           db.memberships = db.memberships.filter((m) => !(m.teamId === teamId && m.userId === userId));
+        }),
+      transferOwnership: (teamId, fromUserId, toUserId) =>
+        store.write((db) => {
+          const member = (userId: string) =>
+            find(db.memberships, (m) => m.teamId === teamId && m.userId === userId, "Membership", `${teamId}/${userId}`);
+          const from = member(fromUserId);
+          const to = member(toUserId);
+          if (from.role !== "owner") throw new ConflictError("owner", "Only the owner can transfer ownership");
+          from.role = "admin";
+          to.role = "owner";
         }),
     },
 
@@ -292,6 +336,29 @@ export function createMockRepositories(store: MockStore): Repositories {
 
     labels: {
       listForTeam: (teamId) => store.read((db) => db.labels.filter((l) => l.teamId === teamId)),
+      get: (id) => store.read((db) => db.labels.find((l) => l.id === id) ?? null),
+      create: (teamId, { name, color }) =>
+        store.write((db) => {
+          find(db.teams, (t) => t.id === teamId, "Team", teamId);
+          assertUniqueLabelName(db, teamId, name);
+          const label = { id: newId(), teamId, name, color };
+          db.labels.push(label);
+          return label;
+        }),
+      update: (id, patch) =>
+        store.write((db) => {
+          const label = find(db.labels, (l) => l.id === id, "Label", id);
+          if (patch.name) assertUniqueLabelName(db, label.teamId, patch.name, id);
+          Object.assign(label, patch);
+          return label;
+        }),
+      delete: (id) =>
+        store.write((db) => {
+          db.labels = db.labels.filter((l) => l.id !== id);
+          for (const task of db.tasks) {
+            if (task.labelIds.includes(id)) task.labelIds = task.labelIds.filter((labelId) => labelId !== id);
+          }
+        }),
     },
 
     comments: {
@@ -312,7 +379,7 @@ export function createMockRepositories(store: MockStore): Repositories {
     },
 
     invites: {
-      create: ({ teamId, emails, invitedBy }) =>
+      create: ({ teamId, emails, invitedBy, role = "member" }) =>
         store.write((db) => {
           find(db.teams, (t) => t.id === teamId, "Team", teamId);
           const memberIds = new Set(db.memberships.filter((m) => m.teamId === teamId).map((m) => m.userId));
@@ -324,7 +391,6 @@ export function createMockRepositories(store: MockStore): Repositories {
             ...db.users.filter((u) => memberIds.has(u.id)).map((u) => u.email),
             ...pending.map((i) => i.email),
           ]);
-          const expiresAt = new Date(createdAt.getTime() + INVITE_TTL_DAYS * DAY_MS);
           const created: Invite[] = [];
           for (const email of new Set(emails.map((e) => e.toLowerCase()))) {
             if (taken.has(email)) continue;
@@ -332,10 +398,10 @@ export function createMockRepositories(store: MockStore): Repositories {
               id: newId(),
               teamId,
               email,
-              role: "member",
+              role,
               token: randomBytes(24).toString("base64url"),
               invitedBy,
-              expiresAt: expiresAt.toISOString(),
+              expiresAt: inviteExpiry(createdAt),
               acceptedAt: null,
               createdAt: createdAt.toISOString(),
             });
@@ -349,6 +415,36 @@ export function createMockRepositories(store: MockStore): Repositories {
           return db.invites.filter(
             (i) => i.teamId === teamId && i.acceptedAt === null && i.expiresAt > current,
           );
+        }),
+      get: (id) => store.read((db) => db.invites.find((i) => i.id === id) ?? null),
+      getByToken: (token) => store.read((db) => db.invites.find((i) => i.token === token) ?? null),
+      resend: (id) =>
+        store.write((db) => {
+          const invite = find(db.invites, (i) => i.id === id, "Invite", id);
+          if (invite.acceptedAt) throw new ConflictError("token", "This invite was already accepted");
+          invite.token = randomBytes(24).toString("base64url");
+          invite.expiresAt = inviteExpiry(new Date());
+          return invite;
+        }),
+      revoke: (id) =>
+        store.write((db) => {
+          db.invites = db.invites.filter((i) => i.id !== id);
+        }),
+      accept: (token, userId) =>
+        store.write((db) => {
+          const invite = find(db.invites, (i) => i.token === token, "Invite", "token");
+          const user = find(db.users, (u) => u.id === userId, "User", userId);
+          if (invite.acceptedAt) throw new ConflictError("token", "This invite has already been used");
+          if (invite.expiresAt <= now()) throw new ConflictError("token", "This invite has expired");
+          if (invite.email !== user.email) {
+            throw new ConflictError("email", `This invite was sent to ${invite.email}`);
+          }
+          invite.acceptedAt = now();
+          const existing = db.memberships.find((m) => m.teamId === invite.teamId && m.userId === userId);
+          if (existing) return existing;
+          const membership: Membership = { teamId: invite.teamId, userId, role: invite.role, joinedAt: now() };
+          db.memberships.push(membership);
+          return membership;
         }),
     },
   };

@@ -12,6 +12,7 @@ import type {
   Invite,
   InviteRole,
   Label,
+  LabelInput,
   Membership,
   Role,
   SignInInput,
@@ -19,7 +20,10 @@ import type {
   Task,
   Team,
   UpdateBoardInput,
+  UpdateLabelInput,
+  UpdateProfileInput,
   UpdateTaskInput,
+  UpdateTeamInput,
   UpdateWorkspaceInput,
   User,
   Workspace,
@@ -41,6 +45,7 @@ export interface AuthRepo {
 export interface UsersRepo {
   getById(id: string): Promise<User | null>;
   getByEmail(email: string): Promise<User | null>;
+  update(id: string, patch: Partial<UpdateProfileInput>): Promise<User>;
 }
 
 export interface TeamsRepo {
@@ -49,6 +54,9 @@ export interface TeamsRepo {
   get(id: string): Promise<Team | null>;
   getBySlug(slug: string): Promise<Team | null>;
   listForUser(userId: string): Promise<Team[]>;
+  update(id: string, patch: UpdateTeamInput): Promise<Team>;
+  /** Deletes the team with its memberships, invites, labels and every workspace. */
+  delete(id: string): Promise<void>;
 }
 
 export interface MembershipsRepo {
@@ -58,6 +66,8 @@ export interface MembershipsRepo {
   listMembers(teamId: string): Promise<TeamMember[]>;
   setRole(teamId: string, userId: string, role: Role): Promise<Membership>;
   remove(teamId: string, userId: string): Promise<void>;
+  /** Makes `toUserId` (a member) the owner and demotes the current owner to admin, atomically. */
+  transferOwnership(teamId: string, fromUserId: string, toUserId: string): Promise<void>;
 }
 
 export interface WorkspacesRepo {
@@ -108,6 +118,12 @@ export interface TasksRepo {
 
 export interface LabelsRepo {
   listForTeam(teamId: string): Promise<Label[]>;
+  get(id: string): Promise<Label | null>;
+  /** Names are unique per team, ignoring case: ConflictError("name"). */
+  create(teamId: string, input: LabelInput): Promise<Label>;
+  update(id: string, patch: UpdateLabelInput): Promise<Label>;
+  /** Deletes the label and removes it from every task. */
+  delete(id: string): Promise<void>;
 }
 
 export interface CommentsRepo {
@@ -119,9 +135,20 @@ export interface CommentsRepo {
 }
 
 export interface InvitesRepo {
-  /** Creates member invites valid for INVITE_TTL_DAYS, skipping existing members and pending invites. */
+  /** Creates invites (default role: member) valid for INVITE_TTL_DAYS, skipping members and pending invites. */
   create(input: Omit<CreateInvitesInput, "role"> & { role?: InviteRole; invitedBy: string }): Promise<Invite[]>;
   listPending(teamId: string): Promise<Invite[]>;
+  get(id: string): Promise<Invite | null>;
+  getByToken(token: string): Promise<Invite | null>;
+  /** Issues a new token and expiry (the old link stops working). */
+  resend(id: string): Promise<Invite>;
+  revoke(id: string): Promise<void>;
+  /**
+   * Adds the user to the team with the invite's role. ConflictError("token")
+   * if the invite was already used or has expired, ConflictError("email") if
+   * it was sent to a different address.
+   */
+  accept(token: string, userId: string): Promise<Membership>;
 }
 
 export interface Repositories {

@@ -15,7 +15,8 @@ describe("seedDb", () => {
     expect(workspace.keyPrefix).toBe("ENG");
     const [board] = await repos.boards.listForWorkspace(workspace.id);
     const tasks = await repos.tasks.listForBoard(board.id);
-    expect(tasks.length).toBeGreaterThan(0);
     expect(tasks.map((t) => t.key)).toContain("ENG-1");
+    expect(tasks.some((t) => t.labelIds.length > 0)).toBe(true);
+    expect((await repos.tasks.listAssignedTo(team.id, user!.id)).length).toBeGreaterThan(0);
   });
 });

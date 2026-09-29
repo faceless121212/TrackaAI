@@ -14,3 +14,14 @@ export const RESERVED_SLUGS: readonly string[] = [
 
 export const MAX_INVITES_PER_BATCH = 10;
 export const INVITE_TTL_DAYS = 7;
+
+// Label colours map to --label-<name> CSS variables in globals.css.
+export const LABEL_COLORS = ["gray", "red", "orange", "yellow", "green", "blue", "purple", "pink"] as const;
+
+// Seeded on every new team; editable from team settings in M3.
+export const DEFAULT_LABELS = [
+  { name: "Bug", color: "red" },
+  { name: "Feature", color: "purple" },
+  { name: "Improvement", color: "blue" },
+  { name: "Docs", color: "gray" },
+] as const;

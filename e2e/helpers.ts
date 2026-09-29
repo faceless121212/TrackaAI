@@ -1,4 +1,4 @@
-import { expect, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 
 // Mirrors DEMO_USER in src/server/data/mock/seed.ts.
 export const DEMO = { email: "demo@trackaai.test", password: "demo-password" };
@@ -40,4 +40,41 @@ export async function createTeamAndWorkspace(page: Page, teamName: string) {
   await expect(page.getByLabel("Key prefix", { exact: true })).toHaveValue("ENG");
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByRole("heading", { name: "Invite your teammates" })).toBeVisible();
+}
+
+/** Signs up a fresh user with their own team and lands on its empty "Engineering" board (keys ENG-n). */
+export async function openFreshBoard(page: Page) {
+  const id = await signUp(page);
+  await createTeamAndWorkspace(page, `Team ${id}`);
+  await page.getByRole("link", { name: "Skip for now" }).click();
+  await expect(page.getByRole("region", { name: "Backlog" })).toBeVisible();
+  return id;
+}
+
+export const column = (page: Page, name: string) => page.getByRole("region", { name, exact: true });
+
+/** Adds a task at the top of a column and waits until the server has assigned its key. */
+export async function quickAdd(page: Page, columnName: string, title: string) {
+  await page.getByRole("button", { name: `Add task to ${columnName}` }).click();
+  const input = page.getByLabel(`New task in ${columnName}`);
+  await input.fill(title);
+  await input.press("Enter");
+  await input.press("Escape");
+  await expect(column(page, columnName).getByRole("article").filter({ hasText: title })).toContainText(/ENG-\d+/);
+}
+
+/** Drags with real pointer events (dnd-kit needs movement past its 5px activation distance). */
+export async function drag(page: Page, from: Locator, to: Locator, offsetY = 60) {
+  const source = (await from.boundingBox())!;
+  const target = (await to.boundingBox())!;
+  await page.mouse.move(source.x + source.width / 2, source.y + source.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(source.x + source.width / 2 + 10, source.y + source.height / 2, { steps: 5 });
+  await page.mouse.move(target.x + target.width / 2, target.y + offsetY, { steps: 20 });
+  await page.mouse.up();
+}
+
+/** Waits until the board has no mutation in flight (it sets aria-busy while saving). */
+export async function saved(page: Page) {
+  await expect(page.locator('[data-slot="board"]')).toHaveAttribute("aria-busy", "false");
 }

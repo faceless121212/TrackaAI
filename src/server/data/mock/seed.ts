@@ -10,12 +10,26 @@ export const DEMO_USER = {
   password: "demo-password",
 } as const;
 
-const DEMO_TASKS: [column: number, title: string, priority: Priority][] = [
-  [0, "Write onboarding copy", "low"],
-  [0, "Pick an analytics provider", "none"],
-  [1, "Add password reset", "medium"],
-  [2, "Build the Kanban board", "high"],
-  [3, "Set up CI", "urgent"],
+const DEMO_TASKS: {
+  column: number;
+  title: string;
+  priority: Priority;
+  labels?: string[];
+  mine?: boolean;
+  description?: string;
+}[] = [
+  { column: 0, title: "Write onboarding copy", priority: "low", labels: ["Docs"] },
+  { column: 0, title: "Pick an analytics provider", priority: "none" },
+  { column: 1, title: "Add password reset", priority: "medium", labels: ["Feature"], mine: true },
+  {
+    column: 2,
+    title: "Build the Kanban board",
+    priority: "high",
+    labels: ["Feature"],
+    mine: true,
+    description: "Drag & drop between columns.\n\n- [x] Columns\n- [ ] Cards",
+  },
+  { column: 3, title: "Fix flaky CI", priority: "urgent", labels: ["Bug"] },
 ];
 
 export async function seedDb(): Promise<MockDb> {
@@ -27,10 +41,19 @@ export async function seedDb(): Promise<MockDb> {
   const workspace = await repos.workspaces.create({ teamId: team.id, name: "Engineering", keyPrefix: "ENG" });
   const board = await repos.boards.create({ workspaceId: workspace.id, name: "Engineering", description: null });
   const columns = await repos.boards.listColumns(board.id);
+  const labels = await repos.labels.listForTeam(team.id);
 
-  for (const [column, title, priority] of DEMO_TASKS) {
+  for (const task of DEMO_TASKS) {
     await repos.tasks.create({
-      ...createTaskInputSchema.parse({ boardId: board.id, columnId: columns[column].id, title, priority }),
+      ...createTaskInputSchema.parse({
+        boardId: board.id,
+        columnId: columns[task.column].id,
+        title: task.title,
+        priority: task.priority,
+        description: task.description,
+        labelIds: labels.filter((l) => task.labels?.includes(l.name)).map((l) => l.id),
+        assignee: task.mine ? { kind: "user", userId: user.id } : null,
+      }),
       createdBy: user.id,
     });
   }

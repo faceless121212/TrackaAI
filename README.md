@@ -13,6 +13,6 @@ pnpm install
 pnpm dev
 ```
 
-The mock backend seeds `.data/mock-db.json` on first run with `demo@trackaai.test` / `demo-password`; delete the file to reset.
+The mock backend seeds `.data/mock-db.json` on first run with `demo@trackaai.test` / `demo-password`; delete the file to reset. Mock data from before M2 has no labels; delete `.data/` to reseed.
 
 Checks: `pnpm lint && pnpm typecheck && pnpm test && pnpm test:e2e`

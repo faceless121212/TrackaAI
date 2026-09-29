@@ -10,8 +10,8 @@ This file holds the detailed, task-level plan for the **current** milestone. Eac
 |---|---|
 | M0 — Foundation | ✅ Done |
 | M1 — Mock data layer + onboarding | ✅ Done |
-| M2 — Workspaces, boards & Kanban | Planned when M1 is merged |
-| M3 — Team & user management | — |
+| M2 — Workspaces, boards & Kanban | ✅ Done |
+| M3 — Team & user management | Planned when M2 is merged |
 | M4 — Supabase (local, Docker) | — |
 | M5 — Emails (Resend) | — |
 | M6 — Billing (Stripe) | — |
@@ -5084,6 +5084,5381 @@ Then confirm CI is green on the PR.
 - Role checks go through `permissions.ts`; stale session cookies are cleared instead of looping.
 - 106 unit tests + 12 e2e tests green locally and in CI.
 
-## Next up: M2
+---
 
-Planned here once M1 is merged: workspace + board CRUD in the sidebar tree, dnd-kit Kanban with fractional positions and optimistic moves, task create dialog (+ quick-add and the `C` shortcut), URL-addressable task sheet (`?task=ENG-12`), labels, comments and board filters.
+# M2 — Workspaces, boards & Kanban Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** The full task lifecycle on mock data: workspace and board CRUD from the sidebar; a drag & drop Kanban (cards within/across columns, column reordering) with optimistic updates; column add/rename/delete; a create-task dialog (also on `C`) and per-column quick-add; a URL-addressable task sheet (`?task=ENG-12`) with status, priority, assignee, labels, due date, Markdown description and comments; board filters (assignee, priority, labels, search) kept in the URL; and a real **My tasks** page.
+
+**Architecture:** Server Actions in `src/server/actions/{workspaces,boards,tasks,comments}.ts` resolve every id to its team through new guards (`requireWorkspaceAccess` / `requireBoardAccess` / `requireColumnAccess` / `requireTaskAccess`), check roles with `permissions.ts`, mutate through the repositories, then call Next 16's `refresh()` (or `revalidatePath(…, "layout")` + `redirect` when navigating). The board is one client component (`BoardView`) that keeps `useOptimistic` copies of tasks and columns (pure reducers in `board-state.ts`), runs every mutation in one `useTransition` (its pending flag is `aria-busy` + a "Saving…" status), and uses dnd-kit (`@dnd-kit/core` + `sortable`). The server — not the client — computes fractional positions inside a single store write from a target **index**, so concurrent moves can't collide; `indexInFullList` maps a drop among filtered (visible) cards back to an index in the full column.
+
+**Product decisions to confirm in review:**
+- Every new team gets four labels (Bug, Feature, Improvement, Docs); creating/editing labels arrives with team settings in M3.
+- Members can create, edit, move and delete tasks and comment; owners/admins additionally manage workspaces, boards and columns and can delete anyone's comment.
+- Quick-add inserts at the **top** of a column; the dialog and status changes append at the **bottom**.
+- A column can only be deleted when empty and never the last one; deleting a board or workspace cascades after a confirmation dialog.
+- A workspace's key prefix can't be changed (task keys stay stable); the PRD's workspace icon is deferred.
+- Assignees are team members only (AI teammates arrive in M9); sub-task UI arrives with the AI breakdown in M7.
+
+**New dependencies:** `@dnd-kit/core`, `@dnd-kit/sortable`, `@dnd-kit/utilities`, `react-markdown`, `remark-gfm`; shadcn `select`, `tabs`, `alert-dialog`.
+
+## Global Constraints
+
+- Everything in M0/M1's Global Constraints still applies. Branch: `git switch -c m2-kanban` from an up-to-date `main`; finish with a PR.
+- Read `node_modules/next/dist/docs/01-app/02-guides/interactive-apps.md` (optimistic UI, transitions, form lifecycle) before Tasks 6–7 (AGENTS.md).
+- Server actions called from event handlers return `ActionResult` (`{ ok } | { ok: false, error }`) for a toast; form actions return `FormState` (now with `ok` so dialogs can close).
+- Nothing on the board mutates without an optimistic update **and** an error toast when the server refuses (the optimistic state then reverts on its own).
+
+## Verified gotchas (found while dry-running this plan)
+
+1. A server action that ends in `redirect()` keeps the shared `[team]` layout, so the sidebar stayed stale after creating a workspace/board → call `revalidatePath(teamPath(slug), "layout")` before redirecting. Actions that stay on the page use `refresh()` from `next/cache`.
+2. E2E reloads right after a drop raced the still-running server action (the optimistic order showed, then reverted after reload) → the board sets `aria-busy` while its mutation transition is pending, and the `saved(page)` helper waits for it before every reload.
+3. Optimistic quick-add tasks and new columns carry temporary `draft-…` ids until `refresh()` replaces them; clicking a draft column's menu raced its replacement → drafts are `aria-busy`, can't be dragged and hide their actions.
+4. Radix focuses the first input when a sheet opens and *selects its text* (the task title) → `onOpenAutoFocus` prevents that and focuses the panel instead.
+5. While the (modal) task sheet is open, Radix hides the rest of the page from the accessibility tree; Playwright `getByRole` can't see the board until the sheet closes (Escape).
+6. A controlled, debounced search input fought URL changes (e.g. Back) by re-pushing its stale local query → the input is uncontrolled and the debounce timer reads the latest filters from a ref.
+7. `useSortable({ disabled: true })` also disables *dropping* → columns use `disabled: { draggable: !canEdit, droppable: false }` so members can still drop cards into them.
+8. `mock-db.json` files from M1 have no `labels`/`comments` arrays → the store merges loaded files over `emptyDb()`. Teams created before M2 have no labels; delete `.data/` to reseed.
+9. `shadcn add select tabs alert-dialog` re-touches `button.tsx`; after the M0 gotcha-4 `cn` rewrite it's byte-identical again.
+
+Preventive (known library behaviour, not observed failing): a stable `id` on `DndContext` keeps its generated ARIA ids identical between SSR and hydration; `draggable={false}` on the card's stretched `<Link>` stops the browser's native link drag from cancelling dnd-kit's pointer events.
+
+## File map (end of M2)
+
+```
+src/
+  app/[team]/page.tsx                        My tasks list (Task 7)
+  app/[team]/layout.tsx                      passes canManage to the sidebar (Task 7)
+  app/[team]/board/[boardId]/page.tsx        loads board data, opens ?task= (Task 6)
+  app/globals.css                            --label-* colour tokens (Task 5)
+  components/
+    board/board-state.ts (+test)             optimistic reducers, planTaskMove (Task 5)
+    board/board-view.tsx                     BoardView: dnd, optimistic state, wiring (Task 6)
+    board/board-column.tsx, task-card.tsx, inline-input.tsx       (Task 6)
+    board/board-toolbar.tsx, board-header.tsx                     (Task 6)
+    board/create-task-dialog.tsx, task-sheet.tsx                  (Task 6)
+    tasks/priority.tsx, label-chip.tsx, member-avatar.tsx, markdown.tsx   (Task 5)
+    forms/use-form-action.ts, fields.tsx (+SelectField)                   (Task 5)
+    shell/workspace-actions.tsx, board-link.tsx, app-sidebar.tsx          (Task 7)
+    onboarding/create-workspace-form.tsx     takes the action as a prop (Task 7)
+    ui/select.tsx, tabs.tsx, alert-dialog.tsx  shadcn (Task 5)
+  lib/
+    domain/positions.ts (+test)              byPosition, positionAt, indexInFullList (Task 1)
+    domain/board-filters.ts (+test)          parse/serialize/filter (Task 1)
+    domain/task-refs.ts (+test)              invalidTaskRef (Task 1)
+    domain/schemas.ts, constants.ts          labels, comments, update inputs (Task 1)
+    forms.ts                                 + ok, ActionResult (Task 4)
+  server/
+    actions/shared.ts                        helpers for the action modules (Task 4)
+    actions/workspaces.ts, boards.ts, tasks.ts, comments.ts        (Task 4)
+    auth/guards.ts                           entity → team access guards (Task 4)
+    auth/permissions.ts (+test)              new actions (Task 3)
+    data/types.ts                            + labels, comments, column/task ops (Task 2)
+    data/mock/{db,store,repositories,seed}.ts (+tests)             (Tasks 2–3)
+e2e/helpers.ts, board.spec.ts                (Task 8)
+```
+
+---
+
+### Task 1: Domain — ordering, filters, task refs, labels & comments
+
+**Files:**
+- Create: `src/lib/domain/positions.ts`, `src/lib/domain/board-filters.ts`, `src/lib/domain/task-refs.ts` (+ a `.test.ts` for each)
+- Modify: `src/lib/domain/constants.ts`, `src/lib/domain/schemas.ts`, `src/lib/domain/schemas.test.ts`, `src/lib/domain/index.ts`
+
+**Interfaces:**
+- Produces: `byPosition`, `positionAt(sortedPositions, index)`, `indexInFullList(fullIds, visibleIdsAfterDrop, movedId)`; `type BoardFilters`, `EMPTY_FILTERS`, `parseBoardFilters(params)`, `serializeBoardFilters(filters, base?)` (URL keys `assignee`, `priority`, `label`, `q`; keeps other params such as `task`), `isFiltered`, `filterTasks(tasks, filters, currentUserId)`; `invalidTaskRef(patch, { memberIds, labelIds }) → "assignee" | "labelIds" | null`; `LABEL_COLORS`, `DEFAULT_LABELS`; schemas/types `labelSchema`/`Label`, `LabelColor`, `commentSchema`/`Comment`, `CommentAuthor`, `updateWorkspaceInputSchema`, `updateBoardInputSchema`, `columnNameSchema`, `createCommentInputSchema`.
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `src/lib/domain/positions.test.ts`:
+
+```ts
+import { describe, expect, it } from "vitest";
+import { byPosition, indexInFullList, positionAt } from "./positions";
+
+describe("positionAt", () => {
+  const sorted = ["a0", "a1", "a2"];
+
+  it("places items at the start, between neighbours and at the end", () => {
+    expect(positionAt(sorted, 0) < "a0").toBe(true);
+    const middle = positionAt(sorted, 1);
+    expect(middle > "a0" && middle < "a1").toBe(true);
+    expect(positionAt(sorted, 3) > "a2").toBe(true);
+  });
+
+  it("clamps out-of-range indexes and handles an empty list", () => {
+    expect(positionAt(sorted, -5) < "a0").toBe(true);
+    expect(positionAt(sorted, 99) > "a2").toBe(true);
+    expect(typeof positionAt([], 0)).toBe("string");
+  });
+});
+
+describe("byPosition", () => {
+  it("sorts by code unit, not locale", () => {
+    const items = [{ position: "a" }, { position: "Zz" }, { position: "a0" }];
+    expect([...items].sort(byPosition).map((i) => i.position)).toEqual(["Zz", "a", "a0"]);
+  });
+});
+
+describe("indexInFullList", () => {
+  const full = ["t1", "t2", "t3", "t4"]; // column order, moved item excluded
+
+  it("uses the visible neighbour before the drop point", () => {
+    // Visible (filtered) list after the drop: t1, X, t4 → X goes right after t1.
+    expect(indexInFullList(full, ["t1", "X", "t4"], "X")).toBe(1);
+  });
+
+  it("uses the neighbour after when dropped first", () => {
+    expect(indexInFullList(full, ["X", "t3"], "X")).toBe(2);
+  });
+
+  it("appends when the visible list has no other items", () => {
+    expect(indexInFullList(full, ["X"], "X")).toBe(4);
+    expect(indexInFullList([], ["X"], "X")).toBe(0);
+  });
+
+  it("matches the visible index when nothing is filtered", () => {
+    expect(indexInFullList(full, ["t1", "t2", "X", "t3", "t4"], "X")).toBe(2);
+  });
+});
+```
+
+Create `src/lib/domain/board-filters.test.ts`:
+
+```ts
+import { describe, expect, it } from "vitest";
+import {
+  EMPTY_FILTERS,
+  filterTasks,
+  isFiltered,
+  parseBoardFilters,
+  serializeBoardFilters,
+  type BoardFilters,
+} from "./board-filters";
+import type { Task } from "./schemas";
+
+function task(overrides: Partial<Task>): Task {
+  return {
+    id: "t",
+    boardId: "b",
+    columnId: "c",
+    number: 1,
+    key: "ENG-1",
+    title: "Task",
+    description: "",
+    priority: "none",
+    assignee: null,
+    labelIds: [],
+    dueDate: null,
+    position: "a0",
+    parentId: null,
+    createdBy: "u1",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+const TASKS = [
+  task({ id: "a", key: "ENG-1", title: "Fix login", priority: "high", assignee: { kind: "user", userId: "me" }, labelIds: ["bug"] }),
+  task({ id: "b", key: "ENG-2", title: "Write docs", priority: "low", assignee: { kind: "user", userId: "ann" }, labelIds: ["docs"] }),
+  task({ id: "c", key: "ENG-3", title: "Refactor", priority: "none" }),
+];
+
+const ids = (filters: Partial<BoardFilters>) =>
+  filterTasks(TASKS, { ...EMPTY_FILTERS, ...filters }, "me").map((t) => t.id);
+
+describe("filterTasks", () => {
+  it("returns everything without filters", () => {
+    expect(ids({})).toEqual(["a", "b", "c"]);
+  });
+
+  it("filters by assignee: me, unassigned or a specific user", () => {
+    expect(ids({ assignee: "me" })).toEqual(["a"]);
+    expect(ids({ assignee: "none" })).toEqual(["c"]);
+    expect(ids({ assignee: "ann" })).toEqual(["b"]);
+  });
+
+  it("matches any selected priority and any selected label", () => {
+    expect(ids({ priorities: ["high", "none"] })).toEqual(["a", "c"]);
+    expect(ids({ labelIds: ["docs", "bug"] })).toEqual(["a", "b"]);
+  });
+
+  it("searches title and key, case-insensitively", () => {
+    expect(ids({ query: "login" })).toEqual(["a"]);
+    expect(ids({ query: "eng-3" })).toEqual(["c"]);
+  });
+
+  it("combines filters with AND", () => {
+    expect(ids({ priorities: ["high", "low"], labelIds: ["docs"] })).toEqual(["b"]);
+  });
+});
+
+describe("URL round-trip", () => {
+  it("parses known values and drops unknown priorities", () => {
+    const params = new URLSearchParams("assignee=me&priority=high,bogus,low&label=l1,l2&q=%20login%20&task=ENG-1");
+    expect(parseBoardFilters(params)).toEqual({
+      assignee: "me",
+      priorities: ["high", "low"],
+      labelIds: ["l1", "l2"],
+      query: "login",
+    });
+  });
+
+  it("writes only non-default filters and keeps other params", () => {
+    const base = new URLSearchParams("task=ENG-1&priority=urgent");
+    const next = serializeBoardFilters({ ...EMPTY_FILTERS, priorities: ["high"], query: "x" }, base);
+    expect(next.toString()).toBe("task=ENG-1&priority=high&q=x");
+    expect(serializeBoardFilters(EMPTY_FILTERS, base).toString()).toBe("task=ENG-1");
+  });
+
+  it("knows when any filter is active", () => {
+    expect(isFiltered(EMPTY_FILTERS)).toBe(false);
+    expect(isFiltered({ ...EMPTY_FILTERS, query: "x" })).toBe(true);
+  });
+});
+```
+
+Create `src/lib/domain/task-refs.test.ts`:
+
+```ts
+import { describe, expect, it } from "vitest";
+import { invalidTaskRef } from "./task-refs";
+
+const context = { memberIds: new Set(["u1"]), labelIds: new Set(["l1", "l2"]) };
+
+describe("invalidTaskRef", () => {
+  it("accepts members, team labels, null assignees and untouched fields", () => {
+    expect(invalidTaskRef({ assignee: { kind: "user", userId: "u1" }, labelIds: ["l1"] }, context)).toBeNull();
+    expect(invalidTaskRef({ assignee: null }, context)).toBeNull();
+    expect(invalidTaskRef({}, context)).toBeNull();
+  });
+
+  it("rejects non-members, agents (until M9) and foreign labels", () => {
+    expect(invalidTaskRef({ assignee: { kind: "user", userId: "x" } }, context)).toBe("assignee");
+    expect(invalidTaskRef({ assignee: { kind: "agent", agentId: "a1" } }, context)).toBe("assignee");
+    expect(invalidTaskRef({ labelIds: ["l1", "other"] }, context)).toBe("labelIds");
+  });
+});
+```
+
+Replace `src/lib/domain/schemas.test.ts` (M1 tests plus labels and comments):
+
+```ts
+import { describe, expect, it } from "vitest";
+import {
+  assigneeSchema,
+  createCommentInputSchema,
+  createInvitesInputSchema,
+  createTaskInputSchema,
+  keyPrefixSchema,
+  labelSchema,
+  signUpInputSchema,
+  slugSchema,
+  updateTaskInputSchema,
+} from "./schemas";
+
+describe("keyPrefixSchema", () => {
+  it.each(["ENG", "A1", "WEB22"])("accepts %s", (value) => {
+    expect(keyPrefixSchema.safeParse(value).success).toBe(true);
+  });
+
+  it.each(["eng", "E", "TOOLONG", "1AB"])("rejects %s", (value) => {
+    expect(keyPrefixSchema.safeParse(value).success).toBe(false);
+  });
+});
+
+describe("slugSchema", () => {
+  it.each(["acme", "acme-inc", "team42"])("accepts %s", (value) => {
+    expect(slugSchema.safeParse(value).success).toBe(true);
+  });
+
+  it.each(["Acme", "-acme", "a", "acme--inc", "acme_inc"])("rejects %s", (value) => {
+    expect(slugSchema.safeParse(value).success).toBe(false);
+  });
+});
+
+describe("createTaskInputSchema", () => {
+  it("trims the title and fills defaults", () => {
+    expect(
+      createTaskInputSchema.parse({ boardId: "b1", columnId: "c1", title: "  Fix login  " }),
+    ).toEqual({
+      boardId: "b1",
+      columnId: "c1",
+      title: "Fix login",
+      description: "",
+      priority: "none",
+      assignee: null,
+      labelIds: [],
+      dueDate: null,
+      parentId: null,
+    });
+  });
+
+  it("rejects a blank title", () => {
+    expect(
+      createTaskInputSchema.safeParse({ boardId: "b1", columnId: "c1", title: "   " }).success,
+    ).toBe(false);
+  });
+
+  it("rejects an unknown priority", () => {
+    expect(
+      createTaskInputSchema.safeParse({ boardId: "b1", columnId: "c1", title: "x", priority: "p0" })
+        .success,
+    ).toBe(false);
+  });
+});
+
+describe("updateTaskInputSchema", () => {
+  it("leaves unspecified fields out instead of defaulting them", () => {
+    expect(updateTaskInputSchema.parse({})).toEqual({});
+    expect(updateTaskInputSchema.parse({ priority: "high" })).toEqual({ priority: "high" });
+  });
+});
+
+describe("assigneeSchema", () => {
+  it("accepts users, agents and null", () => {
+    expect(assigneeSchema.parse({ kind: "user", userId: "u1" })).toEqual({ kind: "user", userId: "u1" });
+    expect(assigneeSchema.parse({ kind: "agent", agentId: "a1" })).toEqual({ kind: "agent", agentId: "a1" });
+    expect(assigneeSchema.parse(null)).toBeNull();
+  });
+});
+
+describe("reserved slugs", () => {
+  it.each(["onboarding", "sign-in", "api"])("rejects %s", (value) => {
+    expect(slugSchema.safeParse(value).success).toBe(false);
+  });
+});
+
+describe("signUpInputSchema", () => {
+  it("normalises the email", () => {
+    expect(
+      signUpInputSchema.parse({ name: "Ada", email: "  Ada@Example.TEST ", password: "longenough" }),
+    ).toEqual({ name: "Ada", email: "ada@example.test", password: "longenough" });
+  });
+
+  it("requires at least 8 password characters", () => {
+    const result = signUpInputSchema.safeParse({ name: "Ada", email: "a@b.test", password: "short" });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("createInvitesInputSchema", () => {
+  it("rejects an empty list and invalid emails", () => {
+    expect(createInvitesInputSchema.safeParse({ teamId: "t1", emails: [] }).success).toBe(false);
+    expect(createInvitesInputSchema.safeParse({ teamId: "t1", emails: ["nope"] }).success).toBe(false);
+  });
+
+  it("caps a batch at 10", () => {
+    const emails = Array.from({ length: 11 }, (_, i) => `u${i}@example.test`);
+    expect(createInvitesInputSchema.safeParse({ teamId: "t1", emails }).success).toBe(false);
+  });
+});
+
+describe("labels and comments", () => {
+  it("accepts palette colours only", () => {
+    expect(labelSchema.safeParse({ id: "l", teamId: "t", name: "Bug", color: "red" }).success).toBe(true);
+    expect(labelSchema.safeParse({ id: "l", teamId: "t", name: "Bug", color: "#ff0000" }).success).toBe(false);
+  });
+
+  it("trims comment bodies and rejects blank ones", () => {
+    expect(createCommentInputSchema.parse({ taskId: "t", body: "  hi  " })).toEqual({ taskId: "t", body: "hi" });
+    expect(createCommentInputSchema.safeParse({ taskId: "t", body: "   " }).success).toBe(false);
+  });
+});
+```
+
+- [ ] **Step 2: Run them to verify they fail**
+
+Run: `pnpm test src/lib/domain`
+Expected: FAIL — `Failed to resolve import "./positions"` (and `./board-filters`, `./task-refs`); `labelSchema` is undefined.
+
+- [ ] **Step 3: Implement**
+
+Create `src/lib/domain/positions.ts`:
+
+```ts
+import { generateKeyBetween } from "fractional-indexing";
+
+// Fractional-index keys compare by code unit, never by locale.
+export function byPosition(a: { position: string }, b: { position: string }): number {
+  return a.position < b.position ? -1 : a.position > b.position ? 1 : 0;
+}
+
+/** A key that sorts at `index` within `sortedPositions` (clamped to the list). */
+export function positionAt(sortedPositions: readonly string[], index: number): string {
+  const i = Math.max(0, Math.min(index, sortedPositions.length));
+  return generateKeyBetween(sortedPositions[i - 1] ?? null, sortedPositions[i] ?? null);
+}
+
+/**
+ * Where a dropped item lands in the full, unfiltered column (`fullIds`, moved
+ * item excluded), given the visible list after the drop (`visibleIds`, moved
+ * item included). Anchors on the visible neighbour before the drop point, else
+ * the one after, else appends.
+ */
+export function indexInFullList(fullIds: readonly string[], visibleIds: readonly string[], movedId: string): number {
+  const at = visibleIds.indexOf(movedId);
+  const before = visibleIds.slice(0, at).reverse().find((id) => fullIds.includes(id));
+  if (before) return fullIds.indexOf(before) + 1;
+  const after = visibleIds.slice(at + 1).find((id) => fullIds.includes(id));
+  if (after) return fullIds.indexOf(after);
+  return fullIds.length;
+}
+```
+
+Create `src/lib/domain/board-filters.ts`:
+
+```ts
+import { PRIORITIES, type Priority, type Task } from "./schemas";
+
+/** `assignee` is "any", "me", "none" (unassigned) or a user id. */
+export type BoardFilters = {
+  assignee: string;
+  priorities: Priority[];
+  labelIds: string[];
+  query: string;
+};
+
+export const EMPTY_FILTERS: BoardFilters = { assignee: "any", priorities: [], labelIds: [], query: "" };
+
+const list = (value: string | null) => (value ? value.split(",").filter(Boolean) : []);
+
+export function parseBoardFilters(params: URLSearchParams): BoardFilters {
+  return {
+    assignee: params.get("assignee") || "any",
+    priorities: list(params.get("priority")).filter((p): p is Priority =>
+      (PRIORITIES as readonly string[]).includes(p),
+    ),
+    labelIds: list(params.get("label")),
+    query: (params.get("q") ?? "").trim(),
+  };
+}
+
+/** Returns `base` with the filter params replaced; unrelated params (e.g. `task`) are kept. */
+export function serializeBoardFilters(filters: BoardFilters, base = new URLSearchParams()): URLSearchParams {
+  const params = new URLSearchParams(base);
+  for (const key of ["assignee", "priority", "label", "q"]) params.delete(key);
+  if (filters.assignee !== "any") params.set("assignee", filters.assignee);
+  if (filters.priorities.length) params.set("priority", filters.priorities.join(","));
+  if (filters.labelIds.length) params.set("label", filters.labelIds.join(","));
+  if (filters.query) params.set("q", filters.query);
+  return params;
+}
+
+export function isFiltered(filters: BoardFilters): boolean {
+  return serializeBoardFilters(filters).size > 0;
+}
+
+export function filterTasks(tasks: Task[], filters: BoardFilters, currentUserId: string): Task[] {
+  const query = filters.query.toLowerCase();
+  const assigneeId = filters.assignee === "me" ? currentUserId : filters.assignee;
+
+  return tasks.filter((task) => {
+    if (filters.assignee === "none" && task.assignee !== null) return false;
+    if (filters.assignee !== "any" && filters.assignee !== "none") {
+      if (task.assignee?.kind !== "user" || task.assignee.userId !== assigneeId) return false;
+    }
+    if (filters.priorities.length && !filters.priorities.includes(task.priority)) return false;
+    if (filters.labelIds.length && !task.labelIds.some((id) => filters.labelIds.includes(id))) return false;
+    if (query && !task.title.toLowerCase().includes(query) && !task.key.toLowerCase().includes(query)) {
+      return false;
+    }
+    return true;
+  });
+}
+```
+
+Create `src/lib/domain/task-refs.ts`:
+
+```ts
+import type { UpdateTaskInput } from "./schemas";
+
+/**
+ * Returns the first field of a task patch that points outside the team
+ * (assignee not a member, label from another team), or null if all is well.
+ * AI-agent assignees are rejected until agents exist (M9).
+ */
+export function invalidTaskRef(
+  patch: Pick<UpdateTaskInput, "assignee" | "labelIds">,
+  context: { memberIds: ReadonlySet<string>; labelIds: ReadonlySet<string> },
+): "assignee" | "labelIds" | null {
+  if (patch.assignee && (patch.assignee.kind !== "user" || !context.memberIds.has(patch.assignee.userId))) {
+    return "assignee";
+  }
+  if (patch.labelIds?.some((id) => !context.labelIds.has(id))) return "labelIds";
+  return null;
+}
+```
+
+Replace `src/lib/domain/constants.ts`:
+
+```ts
+// Columns seeded on every new board (PRD §5.1).
+export const DEFAULT_COLUMNS = ["Backlog", "Todo", "In Progress", "In Review", "Done"] as const;
+
+// Top-level routes that a team slug (/[team]) must never shadow.
+export const RESERVED_SLUGS: readonly string[] = [
+  "api",
+  "invite",
+  "onboarding",
+  "settings",
+  "sign-in",
+  "sign-out",
+  "sign-up",
+];
+
+export const MAX_INVITES_PER_BATCH = 10;
+export const INVITE_TTL_DAYS = 7;
+
+// Label colours map to --label-<name> CSS variables in globals.css.
+export const LABEL_COLORS = ["gray", "red", "orange", "yellow", "green", "blue", "purple", "pink"] as const;
+
+// Seeded on every new team; editable from team settings in M3.
+export const DEFAULT_LABELS = [
+  { name: "Bug", color: "red" },
+  { name: "Feature", color: "purple" },
+  { name: "Improvement", color: "blue" },
+  { name: "Docs", color: "gray" },
+] as const;
+```
+
+Replace `src/lib/domain/schemas.ts`:
+
+```ts
+import { z } from "zod";
+import { LABEL_COLORS, MAX_INVITES_PER_BATCH, RESERVED_SLUGS } from "./constants";
+
+export const ROLES = ["owner", "admin", "member"] as const;
+export const PRIORITIES = ["none", "low", "medium", "high", "urgent"] as const;
+export const PLANS = ["lite", "pro"] as const;
+
+export const idSchema = z.string().min(1);
+export const roleSchema = z.enum(ROLES);
+export const prioritySchema = z.enum(PRIORITIES);
+export const planSchema = z.enum(PLANS);
+
+export const slugSchema = z
+  .string()
+  .min(2)
+  .max(40)
+  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Use lowercase letters, numbers and single dashes")
+  .refine((slug) => !RESERVED_SLUGS.includes(slug), "This name is reserved");
+
+export const keyPrefixSchema = z
+  .string()
+  .regex(/^[A-Z][A-Z0-9]{1,4}$/, "Use 2–5 uppercase letters or digits, starting with a letter");
+
+const timestampSchema = z.iso.datetime();
+
+// Trim and lowercase before checking the format, so " Ann@X.test " is valid.
+export const emailSchema = z.string().trim().toLowerCase().pipe(z.email("Enter a valid email"));
+export const passwordSchema = z.string().min(8, "Use at least 8 characters").max(72);
+
+export const userSchema = z.object({
+  id: idSchema,
+  email: z.email(),
+  name: z.string().trim().min(1).max(80),
+  avatarUrl: z.url().nullable(),
+  createdAt: timestampSchema,
+});
+
+export const teamSchema = z.object({
+  id: idSchema,
+  name: z.string().trim().min(1).max(60),
+  slug: slugSchema,
+  plan: planSchema,
+  createdAt: timestampSchema,
+});
+
+export const membershipSchema = z.object({
+  teamId: idSchema,
+  userId: idSchema,
+  role: roleSchema,
+  joinedAt: timestampSchema,
+});
+
+export const workspaceSchema = z.object({
+  id: idSchema,
+  teamId: idSchema,
+  name: z.string().trim().min(1).max(60),
+  keyPrefix: keyPrefixSchema,
+  nextTaskNumber: z.number().int().positive(),
+  createdAt: timestampSchema,
+});
+
+export const boardSchema = z.object({
+  id: idSchema,
+  workspaceId: idSchema,
+  name: z.string().trim().min(1).max(60),
+  description: z.string().max(500).nullable(),
+  createdAt: timestampSchema,
+});
+
+export const columnSchema = z.object({
+  id: idSchema,
+  boardId: idSchema,
+  name: z.string().trim().min(1).max(40),
+  position: z.string().min(1),
+});
+
+export const assigneeSchema = z
+  .discriminatedUnion("kind", [
+    z.object({ kind: z.literal("user"), userId: idSchema }),
+    z.object({ kind: z.literal("agent"), agentId: idSchema }),
+  ])
+  .nullable();
+
+export const taskSchema = z.object({
+  id: idSchema,
+  boardId: idSchema,
+  columnId: idSchema,
+  number: z.number().int().positive(),
+  key: z.string().min(1),
+  title: z.string().trim().min(1).max(200),
+  description: z.string().max(20_000),
+  priority: prioritySchema,
+  assignee: assigneeSchema,
+  labelIds: z.array(idSchema),
+  dueDate: z.iso.date().nullable(),
+  position: z.string().min(1),
+  parentId: idSchema.nullable(),
+  createdBy: idSchema,
+  createdAt: timestampSchema,
+  updatedAt: timestampSchema,
+});
+
+export const labelColorSchema = z.enum(LABEL_COLORS);
+
+export const labelSchema = z.object({
+  id: idSchema,
+  teamId: idSchema,
+  name: z.string().trim().min(1).max(30),
+  color: labelColorSchema,
+});
+
+export const commentAuthorSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("user"), userId: idSchema }),
+  z.object({ kind: z.literal("agent"), agentId: idSchema }),
+]);
+
+export const commentSchema = z.object({
+  id: idSchema,
+  taskId: idSchema,
+  author: commentAuthorSchema,
+  body: z.string().trim().min(1, "Write something first").max(10_000),
+  createdAt: timestampSchema,
+});
+
+export const inviteSchema = z.object({
+  id: idSchema,
+  teamId: idSchema,
+  email: z.email(),
+  role: roleSchema.exclude(["owner"]),
+  token: z.string().min(16),
+  invitedBy: idSchema,
+  expiresAt: timestampSchema,
+  acceptedAt: timestampSchema.nullable(),
+  createdAt: timestampSchema,
+});
+
+export const signUpInputSchema = z.object({
+  name: userSchema.shape.name,
+  email: emailSchema,
+  password: passwordSchema,
+});
+
+export const signInInputSchema = z.object({
+  email: emailSchema,
+  password: z.string().min(1, "Enter your password"),
+});
+
+export const createInvitesInputSchema = z.object({
+  teamId: idSchema,
+  emails: z
+    .array(emailSchema)
+    .min(1, "Add at least one email")
+    .max(MAX_INVITES_PER_BATCH, `Invite at most ${MAX_INVITES_PER_BATCH} people at a time`),
+});
+
+export const createTeamInputSchema = teamSchema.pick({ name: true, slug: true });
+
+export const createWorkspaceInputSchema = workspaceSchema.pick({
+  teamId: true,
+  name: true,
+  keyPrefix: true,
+});
+
+export const createBoardInputSchema = boardSchema
+  .pick({ workspaceId: true, name: true })
+  .extend({ description: z.string().max(500).nullable().default(null) });
+
+export const createTaskInputSchema = z.object({
+  boardId: idSchema,
+  columnId: idSchema,
+  title: taskSchema.shape.title,
+  description: taskSchema.shape.description.default(""),
+  priority: prioritySchema.default("none"),
+  assignee: assigneeSchema.default(null),
+  labelIds: z.array(idSchema).default([]),
+  dueDate: taskSchema.shape.dueDate.default(null),
+  parentId: taskSchema.shape.parentId.default(null),
+});
+
+export const updateWorkspaceInputSchema = workspaceSchema.pick({ name: true });
+
+export const updateBoardInputSchema = boardSchema.pick({ name: true, description: true }).partial();
+
+export const columnNameSchema = columnSchema.shape.name;
+
+export const createCommentInputSchema = commentSchema.pick({ taskId: true, body: true });
+
+// No defaults here: an update only touches the fields it names.
+export const updateTaskInputSchema = taskSchema
+  .pick({
+    title: true,
+    description: true,
+    priority: true,
+    assignee: true,
+    labelIds: true,
+    dueDate: true,
+    parentId: true,
+  })
+  .partial();
+
+export type Role = z.infer<typeof roleSchema>;
+export type Priority = z.infer<typeof prioritySchema>;
+export type Plan = z.infer<typeof planSchema>;
+export type User = z.infer<typeof userSchema>;
+export type Team = z.infer<typeof teamSchema>;
+export type Membership = z.infer<typeof membershipSchema>;
+export type Workspace = z.infer<typeof workspaceSchema>;
+export type Board = z.infer<typeof boardSchema>;
+export type Column = z.infer<typeof columnSchema>;
+export type Assignee = z.infer<typeof assigneeSchema>;
+export type Task = z.infer<typeof taskSchema>;
+export type LabelColor = z.infer<typeof labelColorSchema>;
+export type Label = z.infer<typeof labelSchema>;
+export type CommentAuthor = z.infer<typeof commentAuthorSchema>;
+export type Comment = z.infer<typeof commentSchema>;
+export type UpdateWorkspaceInput = z.infer<typeof updateWorkspaceInputSchema>;
+export type UpdateBoardInput = z.infer<typeof updateBoardInputSchema>;
+export type CreateCommentInput = z.infer<typeof createCommentInputSchema>;
+export type Invite = z.infer<typeof inviteSchema>;
+export type SignUpInput = z.infer<typeof signUpInputSchema>;
+export type SignInInput = z.infer<typeof signInInputSchema>;
+export type CreateInvitesInput = z.infer<typeof createInvitesInputSchema>;
+export type CreateTeamInput = z.infer<typeof createTeamInputSchema>;
+export type CreateWorkspaceInput = z.infer<typeof createWorkspaceInputSchema>;
+export type CreateBoardInput = z.infer<typeof createBoardInputSchema>;
+export type CreateTaskInput = z.infer<typeof createTaskInputSchema>;
+export type UpdateTaskInput = z.infer<typeof updateTaskInputSchema>;
+```
+
+Replace `src/lib/domain/index.ts`:
+
+```ts
+export * from "./constants";
+export * from "./schemas";
+export * from "./task-key";
+export * from "./text";
+export * from "./board-filters";
+export * from "./positions";
+export * from "./task-refs";
+```
+
+- [ ] **Step 4: Verify**
+
+Run: `pnpm test && pnpm lint && pnpm typecheck`
+Expected: 125 tests pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add -A
+git commit -m "feat(domain): add ordering, board filters, task refs, labels and comments"
+```
+
+---
+
+### Task 2: Data layer — labels, comments, column ops, index-based moves, cascades
+
+**Files:**
+- Modify: `src/server/data/types.ts`, `src/server/data/mock/db.ts`, `src/server/data/mock/store.ts`, `src/server/data/mock/store.test.ts`, `src/server/data/mock/repositories.ts`, `src/server/data/mock/repositories.test.ts`
+
+**Interfaces:**
+- Produces: `type TeamMember = Membership & { user }`; `teams.get`; `memberships.listMembers`; `workspaces.update`/`delete`; `boards.update`/`delete`/`getColumn`/`createColumn`/`renameColumn`/`moveColumn(id, index)`/`deleteColumn` (ConflictError when it has tasks or is the last); `tasks.create({ …, placement?: "start" | "end" })`, `tasks.get`, `tasks.listAssignedTo(teamId, userId)`, `tasks.move(id, { columnId, index })` (**replaces** M1's `{ columnId, position }`), `tasks.delete` (comments go too; sub-tasks detach); `labels.listForTeam`; `comments.listForTask`/`get`/`create`/`delete`. `teams.create` seeds `DEFAULT_LABELS`. Stored files missing newer collections load with them defaulted (gotcha 8).
+
+- [ ] **Step 1: Write the failing tests**
+
+Replace `src/server/data/mock/repositories.test.ts`:
+
+```ts
+import { beforeEach, describe, expect, it } from "vitest";
+import { DEFAULT_COLUMNS, DEFAULT_LABELS, createTaskInputSchema, type User } from "@/lib/domain";
+import { ConflictError, NotFoundError } from "../errors";
+import type { Repositories } from "../types";
+import { emptyDb } from "./db";
+import { createMockRepositories } from "./repositories";
+import { createMemoryStore } from "./store";
+
+let repos: Repositories;
+let owner: User;
+
+beforeEach(async () => {
+  repos = createMockRepositories(createMemoryStore(emptyDb()));
+  owner = await repos.auth.signUp({ name: "Owner", email: "owner@example.test", password: "password1" });
+});
+
+async function setupBoard() {
+  const team = await repos.teams.create({ name: "Acme", slug: "acme", ownerId: owner.id });
+  const workspace = await repos.workspaces.create({ teamId: team.id, name: "Eng", keyPrefix: "ENG" });
+  const board = await repos.boards.create({ workspaceId: workspace.id, name: "Eng", description: null });
+  const columns = await repos.boards.listColumns(board.id);
+  return { team, workspace, board, columns };
+}
+
+function taskInput(boardId: string, columnId: string, title: string) {
+  return { ...createTaskInputSchema.parse({ boardId, columnId, title }), createdBy: owner.id };
+}
+
+describe("auth", () => {
+  it("signs in with the right password only", async () => {
+    expect(await repos.auth.signIn({ email: "owner@example.test", password: "password1" })).toEqual(owner);
+    expect(await repos.auth.signIn({ email: "owner@example.test", password: "nope" })).toBeNull();
+    expect(await repos.auth.signIn({ email: "ghost@example.test", password: "password1" })).toBeNull();
+  });
+
+  it("rejects a duplicate email, case-insensitively", async () => {
+    await expect(
+      repos.auth.signUp({ name: "Dup", email: "OWNER@example.test", password: "password1" }),
+    ).rejects.toBeInstanceOf(ConflictError);
+  });
+
+  it("exposes users by id and email", async () => {
+    expect(await repos.users.getById(owner.id)).toEqual(owner);
+    expect(await repos.users.getByEmail("Owner@Example.test")).toEqual(owner);
+  });
+});
+
+describe("teams", () => {
+  it("makes the creator the owner", async () => {
+    const team = await repos.teams.create({ name: "Acme", slug: "acme", ownerId: owner.id });
+    expect(team.plan).toBe("lite");
+    expect(await repos.memberships.get(team.id, owner.id)).toMatchObject({ role: "owner" });
+    expect(await repos.teams.listForUser(owner.id)).toEqual([team]);
+    expect(await repos.teams.getBySlug("acme")).toEqual(team);
+  });
+
+  it("rejects a taken slug", async () => {
+    await repos.teams.create({ name: "Acme", slug: "acme", ownerId: owner.id });
+    const error = await repos.teams
+      .create({ name: "Other", slug: "acme", ownerId: owner.id })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ConflictError);
+    expect((error as ConflictError).field).toBe("slug");
+  });
+});
+
+describe("memberships", () => {
+  it("changes roles and removes members", async () => {
+    const { team } = await setupBoard();
+    expect(await repos.memberships.setRole(team.id, owner.id, "admin")).toMatchObject({ role: "admin" });
+    const stranger = await repos.auth.signUp({ name: "S", email: "s@example.test", password: "password1" });
+    await expect(repos.memberships.setRole(team.id, stranger.id, "admin")).rejects.toBeInstanceOf(
+      NotFoundError,
+    );
+    await repos.memberships.remove(team.id, owner.id);
+    expect(await repos.memberships.list(team.id)).toEqual([]);
+  });
+});
+
+describe("workspaces", () => {
+  it("starts task numbering at 1 and rejects a duplicate prefix in the team", async () => {
+    const { team, workspace } = await setupBoard();
+    expect(workspace.nextTaskNumber).toBe(1);
+    expect(await repos.workspaces.listForTeam(team.id)).toEqual([workspace]);
+    await expect(
+      repos.workspaces.create({ teamId: team.id, name: "Again", keyPrefix: "ENG" }),
+    ).rejects.toBeInstanceOf(ConflictError);
+  });
+});
+
+describe("boards", () => {
+  it("seeds the default columns in order", async () => {
+    const { board, columns } = await setupBoard();
+    expect(columns.map((c) => c.name)).toEqual([...DEFAULT_COLUMNS]);
+    expect(columns.every((c) => c.boardId === board.id)).toBe(true);
+    const positions = columns.map((c) => c.position);
+    expect([...positions].sort()).toEqual(positions);
+  });
+
+  it("fails for an unknown workspace", async () => {
+    await expect(
+      repos.boards.create({ workspaceId: "nope", name: "X", description: null }),
+    ).rejects.toBeInstanceOf(NotFoundError);
+  });
+});
+
+describe("tasks", () => {
+  it("allocates sequential keys per workspace and appends to the column", async () => {
+    const { workspace, board, columns } = await setupBoard();
+    const first = await repos.tasks.create(taskInput(board.id, columns[0].id, "One"));
+    const second = await repos.tasks.create(taskInput(board.id, columns[0].id, "Two"));
+    expect([first.key, second.key]).toEqual(["ENG-1", "ENG-2"]);
+    expect(first.position < second.position).toBe(true);
+    expect((await repos.workspaces.get(workspace.id))?.nextTaskNumber).toBe(3);
+    expect((await repos.tasks.listForBoard(board.id)).map((t) => t.title)).toEqual(["One", "Two"]);
+    expect(await repos.tasks.getByKey(workspace.id, "eng-2")).toEqual(second);
+  });
+
+  it("rejects a column from another board", async () => {
+    const { workspace, board } = await setupBoard();
+    const other = await repos.boards.create({ workspaceId: workspace.id, name: "Other", description: null });
+    const [otherColumn] = await repos.boards.listColumns(other.id);
+    await expect(repos.tasks.create(taskInput(board.id, otherColumn.id, "X"))).rejects.toBeInstanceOf(
+      NotFoundError,
+    );
+  });
+
+  it("updates fields and moves between columns", async () => {
+    const { board, columns } = await setupBoard();
+    const task = await repos.tasks.create(taskInput(board.id, columns[0].id, "One"));
+    const updated = await repos.tasks.update(task.id, { priority: "high" });
+    expect(updated).toMatchObject({ priority: "high", title: "One" });
+    const moved = await repos.tasks.move(task.id, { columnId: columns[2].id, index: 0 });
+    expect(moved.columnId).toBe(columns[2].id);
+    expect(await repos.tasks.get(task.id)).toEqual(moved);
+  });
+
+  it("inserts quick-added tasks at the start and moves by index", async () => {
+    const { board, columns } = await setupBoard();
+    const [todo] = columns;
+    const a = await repos.tasks.create(taskInput(board.id, todo.id, "A"));
+    const b = await repos.tasks.create(taskInput(board.id, todo.id, "B"));
+    const top = await repos.tasks.create({ ...taskInput(board.id, todo.id, "Top"), placement: "start" });
+    const titles = async () => (await repos.tasks.listForBoard(board.id)).map((t) => t.title);
+    expect(await titles()).toEqual(["Top", "A", "B"]);
+
+    await repos.tasks.move(top.id, { columnId: todo.id, index: 2 }); // index among the others
+    expect(await titles()).toEqual(["A", "B", "Top"]);
+    await repos.tasks.move(b.id, { columnId: todo.id, index: 0 });
+    expect(await titles()).toEqual(["B", "A", "Top"]);
+    expect(a.key).toBe("ENG-1");
+  });
+
+  it("deletes a task with its comments and detaches sub-tasks", async () => {
+    const { board, columns } = await setupBoard();
+    const parent = await repos.tasks.create(taskInput(board.id, columns[0].id, "Parent"));
+    const child = await repos.tasks.create({
+      ...taskInput(board.id, columns[0].id, "Child"),
+      parentId: parent.id,
+    });
+    await repos.comments.create({ taskId: parent.id, body: "hi", author: { kind: "user", userId: owner.id } });
+    await repos.tasks.delete(parent.id);
+    expect(await repos.tasks.get(parent.id)).toBeNull();
+    expect((await repos.tasks.get(child.id))?.parentId).toBeNull();
+    expect(await repos.comments.listForTask(parent.id)).toEqual([]);
+  });
+
+  it("lists tasks assigned to a user across the team's boards", async () => {
+    const { team, board, columns } = await setupBoard();
+    const mine = await repos.tasks.create({
+      ...taskInput(board.id, columns[0].id, "Mine"),
+      assignee: { kind: "user", userId: owner.id },
+    });
+    await repos.tasks.create(taskInput(board.id, columns[0].id, "Nobody's"));
+    expect((await repos.tasks.listAssignedTo(team.id, owner.id)).map((t) => t.id)).toEqual([mine.id]);
+  });
+});
+
+describe("columns", () => {
+  it("adds, renames and reorders columns", async () => {
+    const { board } = await setupBoard();
+    const added = await repos.boards.createColumn(board.id, "QA");
+    await repos.boards.renameColumn(added.id, "Testing");
+    await repos.boards.moveColumn(added.id, 0);
+    const names = (await repos.boards.listColumns(board.id)).map((c) => c.name);
+    expect(names).toEqual(["Testing", ...DEFAULT_COLUMNS]);
+    expect(await repos.boards.getColumn(added.id)).toMatchObject({ name: "Testing" });
+  });
+
+  it("refuses to delete a column that still has tasks, or the last column", async () => {
+    const { board, columns } = await setupBoard();
+    await repos.tasks.create(taskInput(board.id, columns[0].id, "Busy"));
+    await expect(repos.boards.deleteColumn(columns[0].id)).rejects.toBeInstanceOf(ConflictError);
+    for (const column of columns.slice(1, -1)) await repos.boards.deleteColumn(column.id);
+    await repos.tasks.delete((await repos.tasks.listForBoard(board.id))[0].id);
+    await repos.boards.deleteColumn(columns[0].id);
+    const [last] = await repos.boards.listColumns(board.id);
+    await expect(repos.boards.deleteColumn(last.id)).rejects.toBeInstanceOf(ConflictError);
+  });
+});
+
+describe("updates and cascading deletes", () => {
+  it("renames workspaces and boards", async () => {
+    const { workspace, board } = await setupBoard();
+    expect(await repos.workspaces.update(workspace.id, { name: "Platform" })).toMatchObject({ name: "Platform" });
+    expect(await repos.boards.update(board.id, { description: "Sprint work" })).toMatchObject({
+      name: "Eng",
+      description: "Sprint work",
+    });
+  });
+
+  it("deleting a workspace removes its boards, columns and tasks", async () => {
+    const { workspace, board, columns } = await setupBoard();
+    const task = await repos.tasks.create(taskInput(board.id, columns[0].id, "Gone"));
+    await repos.workspaces.delete(workspace.id);
+    expect(await repos.workspaces.get(workspace.id)).toBeNull();
+    expect(await repos.boards.get(board.id)).toBeNull();
+    expect(await repos.boards.listColumns(board.id)).toEqual([]);
+    expect(await repos.tasks.get(task.id)).toBeNull();
+  });
+
+  it("deleting a board keeps its workspace", async () => {
+    const { workspace, board } = await setupBoard();
+    await repos.boards.delete(board.id);
+    expect(await repos.boards.listForWorkspace(workspace.id)).toEqual([]);
+    expect(await repos.workspaces.get(workspace.id)).not.toBeNull();
+  });
+});
+
+describe("labels, comments and members", () => {
+  it("seeds the default labels on team creation", async () => {
+    const { team } = await setupBoard();
+    const labels = await repos.labels.listForTeam(team.id);
+    expect(labels.map((l) => l.name)).toEqual(DEFAULT_LABELS.map((l) => l.name));
+  });
+
+  it("stores comments oldest first", async () => {
+    const { board, columns } = await setupBoard();
+    const task = await repos.tasks.create(taskInput(board.id, columns[0].id, "Talk"));
+    const author = { kind: "user" as const, userId: owner.id };
+    const first = await repos.comments.create({ taskId: task.id, body: "first", author });
+    await repos.comments.create({ taskId: task.id, body: "second", author });
+    expect((await repos.comments.listForTask(task.id)).map((c) => c.body)).toEqual(["first", "second"]);
+    expect(await repos.comments.get(first.id)).toEqual(first);
+    await repos.comments.delete(first.id);
+    expect((await repos.comments.listForTask(task.id)).map((c) => c.body)).toEqual(["second"]);
+  });
+
+  it("lists members with their user records", async () => {
+    const { team } = await setupBoard();
+    expect(await repos.teams.get(team.id)).toEqual(team);
+    const [member] = await repos.memberships.listMembers(team.id);
+    expect(member).toMatchObject({ role: "owner", user: { id: owner.id, name: "Owner" } });
+  });
+});
+
+describe("invites", () => {
+  it("creates pending invites with a token and 7-day expiry, skipping duplicates and members", async () => {
+    const { team } = await setupBoard();
+    const created = await repos.invites.create({
+      teamId: team.id,
+      emails: ["a@example.test", "owner@example.test"],
+      invitedBy: owner.id,
+    });
+    expect(created.map((i) => i.email)).toEqual(["a@example.test"]);
+    const [invite] = created;
+    expect(invite.role).toBe("member");
+    expect(invite.token.length).toBeGreaterThanOrEqual(16);
+    const days = (Date.parse(invite.expiresAt) - Date.parse(invite.createdAt)) / 86_400_000;
+    expect(days).toBe(7);
+
+    const again = await repos.invites.create({ teamId: team.id, emails: ["a@example.test"], invitedBy: owner.id });
+    expect(again).toEqual([]);
+    expect(await repos.invites.listPending(team.id)).toEqual([invite]);
+  });
+});
+```
+
+Replace `src/server/data/mock/store.test.ts`:
+
+```ts
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { emptyDb, type MockDb } from "./db";
+import { createFileStore, createMemoryStore } from "./store";
+
+const user = (id: string) => ({
+  id,
+  email: `${id}@example.test`,
+  name: id,
+  avatarUrl: null,
+  createdAt: "2026-01-01T00:00:00.000Z",
+});
+
+describe("createMemoryStore", () => {
+  it("keeps writes and discards them when the writer throws", async () => {
+    const store = createMemoryStore(emptyDb());
+    await store.write((db) => db.users.push(user("u1")));
+    await expect(
+      store.write((db) => {
+        db.users.push(user("u2"));
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
+    expect(await store.read((db) => db.users.map((u) => u.id))).toEqual(["u1"]);
+  });
+});
+
+describe("createFileStore", () => {
+  let dir: string;
+  let file: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "tracka-store-"));
+    file = join(dir, "nested", "db.json");
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("seeds a missing file and persists it", async () => {
+    const store = createFileStore(file, () => ({ ...emptyDb(), users: [user("seed")] }));
+    expect(await store.read((db) => db.users.length)).toBe(1);
+    const onDisk = JSON.parse(await readFile(file, "utf8"));
+    expect(onDisk.users[0].id).toBe("seed");
+  });
+
+  it("fills in collections added after the file was written", async () => {
+    const older: Partial<MockDb> = emptyDb();
+    delete older.labels;
+    delete older.comments;
+    await createFileStore(file, () => older as MockDb).read(() => null);
+    const store = createFileStore(file, emptyDb);
+    expect(await store.read((db) => [db.labels, db.comments])).toEqual([[], []]);
+  });
+
+  it("serialises concurrent writes so none are lost", async () => {
+    const store = createFileStore(file, emptyDb);
+    await Promise.all(
+      Array.from({ length: 20 }, (_, i) => store.write((db) => db.users.push(user(`u${i}`)))),
+    );
+    const reopened = createFileStore(file, emptyDb);
+    expect(await reopened.read((db) => db.users.length)).toBe(20);
+  });
+});
+```
+
+- [ ] **Step 2: Run them to verify they fail**
+
+Run: `pnpm test src/server/data`
+Expected: FAIL — 13 tests (e.g. `repos.tasks.get is not a function`, `repos.labels` undefined, `db.labels` undefined).
+
+- [ ] **Step 3: Implement**
+
+Replace `src/server/data/types.ts`:
+
+```ts
+import type {
+  Board,
+  Column,
+  Comment,
+  CommentAuthor,
+  CreateCommentInput,
+  CreateBoardInput,
+  CreateInvitesInput,
+  CreateTaskInput,
+  CreateTeamInput,
+  CreateWorkspaceInput,
+  Invite,
+  Label,
+  Membership,
+  Role,
+  SignInInput,
+  SignUpInput,
+  Task,
+  Team,
+  UpdateBoardInput,
+  UpdateTaskInput,
+  UpdateWorkspaceInput,
+  User,
+  Workspace,
+} from "@/lib/domain";
+
+export type TeamMember = Membership & { user: User };
+
+// Every backend (mock in M1, Supabase in M4) implements these. UI and server
+// actions depend only on this file, never on a concrete backend.
+// Methods throw NotFoundError / ConflictError from ./errors.
+
+export interface AuthRepo {
+  /** Creates the user and their credentials. Throws ConflictError("email") if taken. */
+  signUp(input: SignUpInput): Promise<User>;
+  /** Returns the user, or null for an unknown email or wrong password. */
+  signIn(input: SignInInput): Promise<User | null>;
+}
+
+export interface UsersRepo {
+  getById(id: string): Promise<User | null>;
+  getByEmail(email: string): Promise<User | null>;
+}
+
+export interface TeamsRepo {
+  /** Creates the team, makes `ownerId` its owner and seeds DEFAULT_LABELS. */
+  create(input: CreateTeamInput & { ownerId: string }): Promise<Team>;
+  get(id: string): Promise<Team | null>;
+  getBySlug(slug: string): Promise<Team | null>;
+  listForUser(userId: string): Promise<Team[]>;
+}
+
+export interface MembershipsRepo {
+  list(teamId: string): Promise<Membership[]>;
+  get(teamId: string, userId: string): Promise<Membership | null>;
+  /** Memberships joined with their users, ordered by name. */
+  listMembers(teamId: string): Promise<TeamMember[]>;
+  setRole(teamId: string, userId: string, role: Role): Promise<Membership>;
+  remove(teamId: string, userId: string): Promise<void>;
+}
+
+export interface WorkspacesRepo {
+  create(input: CreateWorkspaceInput): Promise<Workspace>;
+  get(id: string): Promise<Workspace | null>;
+  listForTeam(teamId: string): Promise<Workspace[]>;
+  update(id: string, patch: UpdateWorkspaceInput): Promise<Workspace>;
+  /** Deletes the workspace with all of its boards, columns, tasks and comments. */
+  delete(id: string): Promise<void>;
+}
+
+export interface BoardsRepo {
+  /** Creates the board and seeds DEFAULT_COLUMNS. */
+  create(input: CreateBoardInput): Promise<Board>;
+  get(id: string): Promise<Board | null>;
+  listForWorkspace(workspaceId: string): Promise<Board[]>;
+  update(id: string, patch: UpdateBoardInput): Promise<Board>;
+  /** Deletes the board with its columns, tasks and comments. */
+  delete(id: string): Promise<void>;
+  listColumns(boardId: string): Promise<Column[]>;
+  getColumn(id: string): Promise<Column | null>;
+  /** Appends a column at the end of the board. */
+  createColumn(boardId: string, name: string): Promise<Column>;
+  renameColumn(id: string, name: string): Promise<Column>;
+  /** Moves the column to `index` among the board's other columns. */
+  moveColumn(id: string, index: number): Promise<Column>;
+  /** Throws ConflictError("column") if the column still has tasks or is the board's last. */
+  deleteColumn(id: string): Promise<void>;
+}
+
+export interface TasksRepo {
+  /**
+   * Allocates the next task number for the board's workspace and places the
+   * task at the end of its column (or the start, for quick-add).
+   */
+  create(input: CreateTaskInput & { createdBy: string; placement?: "start" | "end" }): Promise<Task>;
+  get(id: string): Promise<Task | null>;
+  getByKey(workspaceId: string, key: string): Promise<Task | null>;
+  listForBoard(boardId: string): Promise<Task[]>;
+  /** Tasks in any of the team's boards assigned to the user, most recently updated first. */
+  listAssignedTo(teamId: string, userId: string): Promise<Task[]>;
+  update(id: string, patch: UpdateTaskInput): Promise<Task>;
+  /** Moves the task to `index` among the other tasks of `columnId` (same board). */
+  move(id: string, to: { columnId: string; index: number }): Promise<Task>;
+  /** Deletes the task and its comments; its sub-tasks become top-level. */
+  delete(id: string): Promise<void>;
+}
+
+export interface LabelsRepo {
+  listForTeam(teamId: string): Promise<Label[]>;
+}
+
+export interface CommentsRepo {
+  /** Oldest first. */
+  listForTask(taskId: string): Promise<Comment[]>;
+  get(id: string): Promise<Comment | null>;
+  create(input: CreateCommentInput & { author: CommentAuthor }): Promise<Comment>;
+  delete(id: string): Promise<void>;
+}
+
+export interface InvitesRepo {
+  /** Creates member invites valid for INVITE_TTL_DAYS, skipping existing members and pending invites. */
+  create(input: CreateInvitesInput & { invitedBy: string }): Promise<Invite[]>;
+  listPending(teamId: string): Promise<Invite[]>;
+}
+
+export interface Repositories {
+  auth: AuthRepo;
+  users: UsersRepo;
+  teams: TeamsRepo;
+  memberships: MembershipsRepo;
+  workspaces: WorkspacesRepo;
+  boards: BoardsRepo;
+  tasks: TasksRepo;
+  invites: InvitesRepo;
+  labels: LabelsRepo;
+  comments: CommentsRepo;
+}
+```
+
+Replace `src/server/data/mock/db.ts`:
+
+```ts
+import type {
+  Board,
+  Column,
+  Comment,
+  Invite,
+  Label,
+  Membership,
+  Task,
+  Team,
+  User,
+  Workspace,
+} from "@/lib/domain";
+
+// Shape of .data/mock-db.json. Mirrors the Supabase tables that arrive in M4.
+export type MockDb = {
+  version: 1;
+  users: User[];
+  credentials: { userId: string; passwordHash: string }[];
+  teams: Team[];
+  memberships: Membership[];
+  workspaces: Workspace[];
+  boards: Board[];
+  columns: Column[];
+  tasks: Task[];
+  invites: Invite[];
+  labels: Label[];
+  comments: Comment[];
+};
+
+export function emptyDb(): MockDb {
+  return {
+    version: 1,
+    users: [],
+    credentials: [],
+    teams: [],
+    memberships: [],
+    workspaces: [],
+    boards: [],
+    columns: [],
+    tasks: [],
+    invites: [],
+    labels: [],
+    comments: [],
+  };
+}
+```
+
+Replace `src/server/data/mock/store.ts`:
+
+```ts
+import { randomUUID } from "node:crypto";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
+import { emptyDb, type MockDb } from "./db";
+
+/**
+ * All mock-backend access goes through `read` / `write`. A `write` callback
+ * mutates the db in place; if it throws, nothing is persisted.
+ */
+export type MockStore = {
+  read<T>(fn: (db: MockDb) => T): Promise<T>;
+  write<T>(fn: (db: MockDb) => T): Promise<T>;
+};
+
+export function createMemoryStore(initial: MockDb): MockStore & { snapshot(): MockDb } {
+  let current = structuredClone(initial);
+  return {
+    async read(fn) {
+      return fn(structuredClone(current));
+    },
+    async write(fn) {
+      const draft = structuredClone(current);
+      const result = fn(draft);
+      current = draft;
+      // Detach the result so callers can't mutate stored state by reference.
+      return structuredClone(result);
+    },
+    snapshot: () => structuredClone(current),
+  };
+}
+
+export function createFileStore(filePath: string, seed: () => MockDb | Promise<MockDb>): MockStore {
+  // One queue per store: operations run strictly one after another, so
+  // read-modify-write cycles never interleave.
+  let queue: Promise<unknown> = Promise.resolve();
+
+  function enqueue<T>(task: () => Promise<T>): Promise<T> {
+    const run = queue.then(task, task);
+    queue = run.catch(() => undefined);
+    return run;
+  }
+
+  async function save(db: MockDb) {
+    await mkdir(dirname(filePath), { recursive: true });
+    const tmp = `${filePath}.${randomUUID()}.tmp`;
+    await writeFile(tmp, JSON.stringify(db, null, 2));
+    await rename(tmp, filePath);
+  }
+
+  async function load(): Promise<MockDb> {
+    try {
+      // Files written by an older milestone lack newer collections; default them.
+      return { ...emptyDb(), ...(JSON.parse(await readFile(filePath, "utf8")) as Partial<MockDb>) };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      const db = await seed();
+      await save(db);
+      return db;
+    }
+  }
+
+  return {
+    read: (fn) => enqueue(async () => fn(await load())),
+    write: (fn) =>
+      enqueue(async () => {
+        const db = await load();
+        const result = fn(db);
+        await save(db);
+        return result;
+      }),
+  };
+}
+```
+
+Replace `src/server/data/mock/repositories.ts`:
+
+```ts
+import { randomBytes, randomUUID } from "node:crypto";
+import { generateNKeysBetween } from "fractional-indexing";
+import {
+  DEFAULT_COLUMNS,
+  DEFAULT_LABELS,
+  INVITE_TTL_DAYS,
+  byPosition,
+  formatTaskKey,
+  positionAt,
+  type Column,
+  type Comment,
+  type Invite,
+  type Task,
+  type User,
+} from "@/lib/domain";
+import { ConflictError, NotFoundError } from "../errors";
+import type { Repositories } from "../types";
+import type { MockDb } from "./db";
+import { hashPassword, verifyPassword } from "./password";
+import type { MockStore } from "./store";
+
+const DAY_MS = 86_400_000;
+
+const newId = () => randomUUID();
+const now = () => new Date().toISOString();
+
+function byCreatedAt(a: { createdAt: string }, b: { createdAt: string }) {
+  return a.createdAt.localeCompare(b.createdAt);
+}
+
+function find<T>(items: T[], predicate: (item: T) => boolean, entity: string, id: string): T {
+  const item = items.find(predicate);
+  if (!item) throw new NotFoundError(entity, id);
+  return item;
+}
+
+function findColumn(db: MockDb, boardId: string, columnId: string): Column {
+  return find(db.columns, (c) => c.id === columnId && c.boardId === boardId, "Column", columnId);
+}
+
+/** Sorted positions of a column's tasks, optionally leaving one task out (the one being moved). */
+function taskPositions(db: MockDb, columnId: string, excludeId?: string): string[] {
+  return db.tasks
+    .filter((t) => t.columnId === columnId && t.id !== excludeId)
+    .sort(byPosition)
+    .map((t) => t.position);
+}
+
+function deleteTasks(db: MockDb, taskIds: Set<string>) {
+  db.tasks = db.tasks.filter((t) => !taskIds.has(t.id));
+  db.comments = db.comments.filter((c) => !taskIds.has(c.taskId));
+  for (const task of db.tasks) {
+    if (task.parentId && taskIds.has(task.parentId)) task.parentId = null;
+  }
+}
+
+function deleteBoards(db: MockDb, boardIds: Set<string>) {
+  deleteTasks(db, new Set(db.tasks.filter((t) => boardIds.has(t.boardId)).map((t) => t.id)));
+  db.columns = db.columns.filter((c) => !boardIds.has(c.boardId));
+  db.boards = db.boards.filter((b) => !boardIds.has(b.id));
+}
+
+export function createMockRepositories(store: MockStore): Repositories {
+  return {
+    auth: {
+      async signUp({ name, email, password }) {
+        const normalized = email.toLowerCase();
+        const passwordHash = await hashPassword(password);
+        return store.write((db) => {
+          if (db.users.some((u) => u.email === normalized)) {
+            throw new ConflictError("email", "An account with this email already exists");
+          }
+          const user: User = { id: newId(), email: normalized, name, avatarUrl: null, createdAt: now() };
+          db.users.push(user);
+          db.credentials.push({ userId: user.id, passwordHash });
+          return user;
+        });
+      },
+
+      async signIn({ email, password }) {
+        const found = await store.read((db) => {
+          const user = db.users.find((u) => u.email === email.toLowerCase());
+          const credentials = user && db.credentials.find((c) => c.userId === user.id);
+          return user && credentials ? { user, passwordHash: credentials.passwordHash } : null;
+        });
+        if (!found || !(await verifyPassword(password, found.passwordHash))) return null;
+        return found.user;
+      },
+    },
+
+    users: {
+      getById: (id) => store.read((db) => db.users.find((u) => u.id === id) ?? null),
+      getByEmail: (email) =>
+        store.read((db) => db.users.find((u) => u.email === email.toLowerCase()) ?? null),
+    },
+
+    teams: {
+      create: ({ name, slug, ownerId }) =>
+        store.write((db) => {
+          if (db.teams.some((t) => t.slug === slug)) {
+            throw new ConflictError("slug", "This URL is already taken");
+          }
+          const team = { id: newId(), name, slug, plan: "lite" as const, createdAt: now() };
+          db.teams.push(team);
+          db.memberships.push({ teamId: team.id, userId: ownerId, role: "owner", joinedAt: now() });
+          for (const label of DEFAULT_LABELS) db.labels.push({ id: newId(), teamId: team.id, ...label });
+          return team;
+        }),
+      get: (id) => store.read((db) => db.teams.find((t) => t.id === id) ?? null),
+      getBySlug: (slug) => store.read((db) => db.teams.find((t) => t.slug === slug) ?? null),
+      listForUser: (userId) =>
+        store.read((db) => {
+          const teamIds = new Set(db.memberships.filter((m) => m.userId === userId).map((m) => m.teamId));
+          return db.teams.filter((t) => teamIds.has(t.id)).sort((a, b) => a.name.localeCompare(b.name));
+        }),
+    },
+
+    memberships: {
+      list: (teamId) => store.read((db) => db.memberships.filter((m) => m.teamId === teamId)),
+      get: (teamId, userId) =>
+        store.read((db) => db.memberships.find((m) => m.teamId === teamId && m.userId === userId) ?? null),
+      listMembers: (teamId) =>
+        store.read((db) =>
+          db.memberships
+            .filter((m) => m.teamId === teamId)
+            .flatMap((m) => {
+              const user = db.users.find((u) => u.id === m.userId);
+              return user ? [{ ...m, user }] : [];
+            })
+            .sort((a, b) => a.user.name.localeCompare(b.user.name)),
+        ),
+      setRole: (teamId, userId, role) =>
+        store.write((db) => {
+          const membership = find(
+            db.memberships,
+            (m) => m.teamId === teamId && m.userId === userId,
+            "Membership",
+            `${teamId}/${userId}`,
+          );
+          membership.role = role;
+          return membership;
+        }),
+      remove: (teamId, userId) =>
+        store.write((db) => {
+          db.memberships = db.memberships.filter((m) => !(m.teamId === teamId && m.userId === userId));
+        }),
+    },
+
+    workspaces: {
+      create: ({ teamId, name, keyPrefix }) =>
+        store.write((db) => {
+          find(db.teams, (t) => t.id === teamId, "Team", teamId);
+          if (db.workspaces.some((w) => w.teamId === teamId && w.keyPrefix === keyPrefix)) {
+            throw new ConflictError("keyPrefix", "Another workspace already uses this prefix");
+          }
+          const workspace = { id: newId(), teamId, name, keyPrefix, nextTaskNumber: 1, createdAt: now() };
+          db.workspaces.push(workspace);
+          return workspace;
+        }),
+      get: (id) => store.read((db) => db.workspaces.find((w) => w.id === id) ?? null),
+      listForTeam: (teamId) =>
+        store.read((db) => db.workspaces.filter((w) => w.teamId === teamId).sort(byCreatedAt)),
+      update: (id, patch) =>
+        store.write((db) => {
+          const workspace = find(db.workspaces, (w) => w.id === id, "Workspace", id);
+          Object.assign(workspace, patch);
+          return workspace;
+        }),
+      delete: (id) =>
+        store.write((db) => {
+          deleteBoards(db, new Set(db.boards.filter((b) => b.workspaceId === id).map((b) => b.id)));
+          db.workspaces = db.workspaces.filter((w) => w.id !== id);
+        }),
+    },
+
+    boards: {
+      create: ({ workspaceId, name, description }) =>
+        store.write((db) => {
+          find(db.workspaces, (w) => w.id === workspaceId, "Workspace", workspaceId);
+          const board = { id: newId(), workspaceId, name, description, createdAt: now() };
+          db.boards.push(board);
+          const positions = generateNKeysBetween(null, null, DEFAULT_COLUMNS.length);
+          DEFAULT_COLUMNS.forEach((columnName, i) => {
+            db.columns.push({ id: newId(), boardId: board.id, name: columnName, position: positions[i] });
+          });
+          return board;
+        }),
+      get: (id) => store.read((db) => db.boards.find((b) => b.id === id) ?? null),
+      listForWorkspace: (workspaceId) =>
+        store.read((db) => db.boards.filter((b) => b.workspaceId === workspaceId).sort(byCreatedAt)),
+      update: (id, patch) =>
+        store.write((db) => {
+          const board = find(db.boards, (b) => b.id === id, "Board", id);
+          Object.assign(board, patch);
+          return board;
+        }),
+      delete: (id) => store.write((db) => deleteBoards(db, new Set([id]))),
+      listColumns: (boardId) =>
+        store.read((db) => db.columns.filter((c) => c.boardId === boardId).sort(byPosition)),
+      getColumn: (id) => store.read((db) => db.columns.find((c) => c.id === id) ?? null),
+      createColumn: (boardId, name) =>
+        store.write((db) => {
+          find(db.boards, (b) => b.id === boardId, "Board", boardId);
+          const positions = db.columns.filter((c) => c.boardId === boardId).sort(byPosition).map((c) => c.position);
+          const column = { id: newId(), boardId, name, position: positionAt(positions, positions.length) };
+          db.columns.push(column);
+          return column;
+        }),
+      renameColumn: (id, name) =>
+        store.write((db) => {
+          const column = find(db.columns, (c) => c.id === id, "Column", id);
+          column.name = name;
+          return column;
+        }),
+      moveColumn: (id, index) =>
+        store.write((db) => {
+          const column = find(db.columns, (c) => c.id === id, "Column", id);
+          const others = db.columns
+            .filter((c) => c.boardId === column.boardId && c.id !== id)
+            .sort(byPosition)
+            .map((c) => c.position);
+          column.position = positionAt(others, index);
+          return column;
+        }),
+      deleteColumn: (id) =>
+        store.write((db) => {
+          const column = find(db.columns, (c) => c.id === id, "Column", id);
+          if (db.tasks.some((t) => t.columnId === id)) {
+            throw new ConflictError("column", "Move or delete this column's tasks first");
+          }
+          if (db.columns.filter((c) => c.boardId === column.boardId).length === 1) {
+            throw new ConflictError("column", "A board needs at least one column");
+          }
+          db.columns = db.columns.filter((c) => c.id !== id);
+        }),
+    },
+
+    tasks: {
+      create: ({ placement = "end", ...input }) =>
+        store.write((db) => {
+          const board = find(db.boards, (b) => b.id === input.boardId, "Board", input.boardId);
+          const workspace = find(db.workspaces, (w) => w.id === board.workspaceId, "Workspace", board.workspaceId);
+          findColumn(db, board.id, input.columnId);
+          const positions = taskPositions(db, input.columnId);
+          const number = workspace.nextTaskNumber++;
+          const timestamp = now();
+          const task: Task = {
+            ...input,
+            id: newId(),
+            number,
+            key: formatTaskKey(workspace.keyPrefix, number),
+            position: positionAt(positions, placement === "start" ? 0 : positions.length),
+            createdAt: timestamp,
+            updatedAt: timestamp,
+          };
+          db.tasks.push(task);
+          return task;
+        }),
+      get: (id) => store.read((db) => db.tasks.find((t) => t.id === id) ?? null),
+      getByKey: (workspaceId, key) =>
+        store.read((db) => {
+          const boardIds = new Set(db.boards.filter((b) => b.workspaceId === workspaceId).map((b) => b.id));
+          const wanted = key.trim().toUpperCase();
+          return db.tasks.find((t) => boardIds.has(t.boardId) && t.key === wanted) ?? null;
+        }),
+      listForBoard: (boardId) =>
+        store.read((db) => db.tasks.filter((t) => t.boardId === boardId).sort(byPosition)),
+      listAssignedTo: (teamId, userId) =>
+        store.read((db) => {
+          const workspaceIds = new Set(db.workspaces.filter((w) => w.teamId === teamId).map((w) => w.id));
+          const boardIds = new Set(db.boards.filter((b) => workspaceIds.has(b.workspaceId)).map((b) => b.id));
+          return db.tasks
+            .filter((t) => boardIds.has(t.boardId) && t.assignee?.kind === "user" && t.assignee.userId === userId)
+            .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+        }),
+      update: (id, patch) =>
+        store.write((db) => {
+          const task = find(db.tasks, (t) => t.id === id, "Task", id);
+          Object.assign(task, patch, { updatedAt: now() });
+          return task;
+        }),
+      move: (id, { columnId, index }) =>
+        store.write((db) => {
+          const task = find(db.tasks, (t) => t.id === id, "Task", id);
+          findColumn(db, task.boardId, columnId);
+          const position = positionAt(taskPositions(db, columnId, id), index);
+          Object.assign(task, { columnId, position, updatedAt: now() });
+          return task;
+        }),
+      delete: (id) => store.write((db) => deleteTasks(db, new Set([id]))),
+    },
+
+    labels: {
+      listForTeam: (teamId) => store.read((db) => db.labels.filter((l) => l.teamId === teamId)),
+    },
+
+    comments: {
+      listForTask: (taskId) =>
+        store.read((db) => db.comments.filter((c) => c.taskId === taskId).sort(byCreatedAt)),
+      get: (id) => store.read((db) => db.comments.find((c) => c.id === id) ?? null),
+      create: ({ taskId, body, author }) =>
+        store.write((db) => {
+          find(db.tasks, (t) => t.id === taskId, "Task", taskId);
+          const comment: Comment = { id: newId(), taskId, body, author, createdAt: now() };
+          db.comments.push(comment);
+          return comment;
+        }),
+      delete: (id) =>
+        store.write((db) => {
+          db.comments = db.comments.filter((c) => c.id !== id);
+        }),
+    },
+
+    invites: {
+      create: ({ teamId, emails, invitedBy }) =>
+        store.write((db) => {
+          find(db.teams, (t) => t.id === teamId, "Team", teamId);
+          const memberIds = new Set(db.memberships.filter((m) => m.teamId === teamId).map((m) => m.userId));
+          const createdAt = new Date();
+          const pending = db.invites.filter(
+            (i) => i.teamId === teamId && i.acceptedAt === null && i.expiresAt > createdAt.toISOString(),
+          );
+          const taken = new Set([
+            ...db.users.filter((u) => memberIds.has(u.id)).map((u) => u.email),
+            ...pending.map((i) => i.email),
+          ]);
+          const expiresAt = new Date(createdAt.getTime() + INVITE_TTL_DAYS * DAY_MS);
+          const created: Invite[] = [];
+          for (const email of new Set(emails.map((e) => e.toLowerCase()))) {
+            if (taken.has(email)) continue;
+            created.push({
+              id: newId(),
+              teamId,
+              email,
+              role: "member",
+              token: randomBytes(24).toString("base64url"),
+              invitedBy,
+              expiresAt: expiresAt.toISOString(),
+              acceptedAt: null,
+              createdAt: createdAt.toISOString(),
+            });
+          }
+          db.invites.push(...created);
+          return created;
+        }),
+      listPending: (teamId) =>
+        store.read((db) => {
+          const current = now();
+          return db.invites.filter(
+            (i) => i.teamId === teamId && i.acceptedAt === null && i.expiresAt > current,
+          );
+        }),
+    },
+  };
+}
+```
+
+- [ ] **Step 4: Verify**
+
+Run: `pnpm test && pnpm lint && pnpm typecheck`
+Expected: 137 tests pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add -A
+git commit -m "feat(data): add labels, comments, column ops and index-based task moves"
+```
+
+---
+
+### Task 3: Permissions + richer seed data
+
+**Files:**
+- Modify: `src/server/auth/permissions.ts`, `src/server/auth/permissions.test.ts`, `src/server/data/mock/seed.ts`, `src/server/data/mock/seed.test.ts`
+
+**Interfaces:**
+- Produces: actions `task:update`, `task:delete`, `comment:create` (everyone) and `comment:moderate`, `workspace:update`, `workspace:delete`, `board:update`, `board:delete`, `column:manage` (owners/admins). The demo board's tasks now carry labels, two are assigned to the demo user and ENG-4 has a Markdown description (ENG-5 becomes "Fix flaky CI").
+
+- [ ] **Step 1: Write the failing tests**
+
+Replace `src/server/auth/permissions.test.ts`:
+
+```ts
+import { describe, expect, it } from "vitest";
+import { ForbiddenError, assertCan, can } from "./permissions";
+
+describe("can", () => {
+  it.each(["team:read", "task:create", "task:update", "task:delete", "comment:create"] as const)(
+    "lets every role %s",
+    (action) => {
+      for (const role of ["owner", "admin", "member"] as const) expect(can(role, action)).toBe(true);
+    },
+  );
+
+  it.each([
+    "workspace:create",
+    "workspace:update",
+    "workspace:delete",
+    "board:create",
+    "board:update",
+    "board:delete",
+    "column:manage",
+    "comment:moderate",
+    "member:invite",
+  ] as const)("limits %s to owners and admins", (action) => {
+    expect(can("owner", action)).toBe(true);
+    expect(can("admin", action)).toBe(true);
+    expect(can("member", action)).toBe(false);
+  });
+});
+
+describe("assertCan", () => {
+  it("throws ForbiddenError when the role lacks the permission", () => {
+    expect(() => assertCan("member", "member:invite")).toThrow(ForbiddenError);
+    expect(() => assertCan("admin", "member:invite")).not.toThrow();
+  });
+});
+```
+
+Replace `src/server/data/mock/seed.test.ts`:
+
+```ts
+import { describe, expect, it } from "vitest";
+import { createMockRepositories } from "./repositories";
+import { DEMO_USER, seedDb } from "./seed";
+import { createMemoryStore } from "./store";
+
+describe("seedDb", () => {
+  it("creates a demo account with a team, workspace and populated board", async () => {
+    const repos = createMockRepositories(createMemoryStore(await seedDb()));
+    const user = await repos.auth.signIn(DEMO_USER);
+    expect(user?.name).toBe(DEMO_USER.name);
+
+    const [team] = await repos.teams.listForUser(user!.id);
+    expect(team.slug).toBe("acme");
+    const [workspace] = await repos.workspaces.listForTeam(team.id);
+    expect(workspace.keyPrefix).toBe("ENG");
+    const [board] = await repos.boards.listForWorkspace(workspace.id);
+    const tasks = await repos.tasks.listForBoard(board.id);
+    expect(tasks.map((t) => t.key)).toContain("ENG-1");
+    expect(tasks.some((t) => t.labelIds.length > 0)).toBe(true);
+    expect((await repos.tasks.listAssignedTo(team.id, user!.id)).length).toBeGreaterThan(0);
+  });
+});
+```
+
+- [ ] **Step 2: Run them to verify they fail**
+
+Run: `pnpm test src/server`
+Expected: FAIL — 10 tests (`can("member", "task:update")` is false; seed has no labels or assignees).
+
+- [ ] **Step 3: Implement**
+
+Replace `src/server/auth/permissions.ts`:
+
+```ts
+import type { Role } from "@/lib/domain";
+
+// Single source of truth for role checks. M3 adds member-management actions.
+const EVERYONE = ["owner", "admin", "member"] as const;
+const MANAGERS = ["owner", "admin"] as const;
+
+const RULES = {
+  "team:read": EVERYONE,
+  "task:create": EVERYONE,
+  "task:update": EVERYONE,
+  "task:delete": EVERYONE,
+  "comment:create": EVERYONE,
+  "comment:moderate": MANAGERS, // delete other people's comments
+  "workspace:create": MANAGERS,
+  "workspace:update": MANAGERS,
+  "workspace:delete": MANAGERS,
+  "board:create": MANAGERS,
+  "board:update": MANAGERS,
+  "board:delete": MANAGERS,
+  "column:manage": MANAGERS,
+  "member:invite": MANAGERS,
+} as const satisfies Record<string, readonly Role[]>;
+
+export type Action = keyof typeof RULES;
+
+export class ForbiddenError extends Error {
+  constructor(role: Role, action: Action) {
+    super(`A ${role} cannot ${action}`);
+    this.name = "ForbiddenError";
+  }
+}
+
+export function can(role: Role, action: Action): boolean {
+  return (RULES[action] as readonly Role[]).includes(role);
+}
+
+export function assertCan(role: Role, action: Action): void {
+  if (!can(role, action)) throw new ForbiddenError(role, action);
+}
+```
+
+Replace `src/server/data/mock/seed.ts`:
+
+```ts
+import { createTaskInputSchema, type Priority } from "@/lib/domain";
+import { emptyDb, type MockDb } from "./db";
+import { createMockRepositories } from "./repositories";
+import { createMemoryStore } from "./store";
+
+// Local-dev account, created whenever the mock db file is missing.
+export const DEMO_USER = {
+  name: "Demo User",
+  email: "demo@trackaai.test",
+  password: "demo-password",
+} as const;
+
+const DEMO_TASKS: {
+  column: number;
+  title: string;
+  priority: Priority;
+  labels?: string[];
+  mine?: boolean;
+  description?: string;
+}[] = [
+  { column: 0, title: "Write onboarding copy", priority: "low", labels: ["Docs"] },
+  { column: 0, title: "Pick an analytics provider", priority: "none" },
+  { column: 1, title: "Add password reset", priority: "medium", labels: ["Feature"], mine: true },
+  {
+    column: 2,
+    title: "Build the Kanban board",
+    priority: "high",
+    labels: ["Feature"],
+    mine: true,
+    description: "Drag & drop between columns.\n\n- [x] Columns\n- [ ] Cards",
+  },
+  { column: 3, title: "Fix flaky CI", priority: "urgent", labels: ["Bug"] },
+];
+
+export async function seedDb(): Promise<MockDb> {
+  const store = createMemoryStore(emptyDb());
+  const repos = createMockRepositories(store);
+
+  const user = await repos.auth.signUp(DEMO_USER);
+  const team = await repos.teams.create({ name: "Acme", slug: "acme", ownerId: user.id });
+  const workspace = await repos.workspaces.create({ teamId: team.id, name: "Engineering", keyPrefix: "ENG" });
+  const board = await repos.boards.create({ workspaceId: workspace.id, name: "Engineering", description: null });
+  const columns = await repos.boards.listColumns(board.id);
+  const labels = await repos.labels.listForTeam(team.id);
+
+  for (const task of DEMO_TASKS) {
+    await repos.tasks.create({
+      ...createTaskInputSchema.parse({
+        boardId: board.id,
+        columnId: columns[task.column].id,
+        title: task.title,
+        priority: task.priority,
+        description: task.description,
+        labelIds: labels.filter((l) => task.labels?.includes(l.name)).map((l) => l.id),
+        assignee: task.mine ? { kind: "user", userId: user.id } : null,
+      }),
+      createdBy: user.id,
+    });
+  }
+
+  return store.snapshot();
+}
+```
+
+- [ ] **Step 4: Verify**
+
+Run: `pnpm test && pnpm lint && pnpm typecheck`
+Expected: 147 tests pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add -A
+git commit -m "feat(auth): add task, board and column permissions; seed labelled demo tasks"
+```
+
+---
+
+### Task 4: Access guards + server actions
+
+**Files:**
+- Create: `src/server/actions/shared.ts`, `src/server/actions/workspaces.ts`, `src/server/actions/boards.ts`, `src/server/actions/tasks.ts`, `src/server/actions/comments.ts`
+- Modify: `src/lib/forms.ts`, `src/server/auth/guards.ts`, `src/server/actions/onboarding.ts`
+
+**Interfaces:**
+- Consumes: Tasks 1–3.
+- Produces: `FormState.ok`, `type ActionResult`; guards `requireWorkspaceAccess(id)`, `requireBoardAccess(id)`, `requireColumnAccess(id)`, `requireTaskAccess(id)` (all 404 for other teams); helpers `conflictToFormState`, `zodToFormState`, `toActionError`, `createWorkspaceWithBoard`, `assertTaskRefs`; actions — form: `createWorkspaceAction`, `renameWorkspaceAction`, `createBoardAction`, `updateBoardAction`, `createTaskAction`, `addCommentAction`; imperative: `deleteWorkspaceAction(id)`, `deleteBoardAction(id)`, `addColumnAction(boardId, name)`, `renameColumnAction(id, name)`, `moveColumnAction(id, index)`, `deleteColumnAction(id)`, `quickAddTaskAction(columnId, title)`, `updateTaskAction(id, patch)`, `moveTaskAction(id, columnId, index)`, `deleteTaskAction(id)`, `deleteCommentAction(id)`. Onboarding now reuses `createWorkspaceWithBoard`.
+
+These are thin glue over tested domain/data code and are covered end-to-end in Task 8; there is no unit test step.
+
+- [ ] **Step 1: Forms and guards**
+
+Replace `src/lib/forms.ts`:
+
+```ts
+// Shape returned by server actions used with useActionState.
+export type FormState = {
+  /** Set on success by actions that don't redirect, so dialogs know to close. */
+  ok?: boolean;
+  fieldErrors?: Partial<Record<string, string[]>>;
+  formError?: string;
+  /** Echoed back so inputs keep their values after a failed submit. */
+  values?: Record<string, string>;
+};
+
+export const initialFormState: FormState = {};
+
+/** Result of a server action called from an event handler (drag, select, delete…). */
+export type ActionResult = { ok: true } | { ok: false; error: string };
+
+export function formValues<K extends string>(formData: FormData, keys: readonly K[]): Record<K, string> {
+  return Object.fromEntries(keys.map((key) => [key, formData.get(key)?.toString() ?? ""])) as Record<
+    K,
+    string
+  >;
+}
+```
+
+Replace `src/server/auth/guards.ts`:
+
+```ts
+import "server-only";
+import { notFound } from "next/navigation";
+import { cache } from "react";
+import { getRepositories } from "@/server/data";
+import { requireUser } from "./session";
+
+/** Loads the team by slug and the caller's membership; 404s for non-members. */
+export const requireTeamMember = cache(async (teamSlug: string) => {
+  const user = await requireUser();
+  const repos = getRepositories();
+  const team = await repos.teams.getBySlug(teamSlug);
+  const membership = team ? await repos.memberships.get(team.id, user.id) : null;
+  if (!team || !membership) notFound();
+  return { user, team, membership };
+});
+
+// The helpers below resolve an entity id up to its team and check membership,
+// so server actions can trust ids coming from the client. Unknown ids and
+// other teams' ids both 404.
+
+export const requireWorkspaceAccess = cache(async (workspaceId: string) => {
+  const user = await requireUser();
+  const repos = getRepositories();
+  const workspace = await repos.workspaces.get(workspaceId);
+  const team = workspace ? await repos.teams.get(workspace.teamId) : null;
+  const membership = team ? await repos.memberships.get(team.id, user.id) : null;
+  if (!workspace || !team || !membership) notFound();
+  return { user, team, membership, workspace };
+});
+
+export const requireBoardAccess = cache(async (boardId: string) => {
+  const board = await getRepositories().boards.get(boardId);
+  if (!board) notFound();
+  return { ...(await requireWorkspaceAccess(board.workspaceId)), board };
+});
+
+export const requireColumnAccess = cache(async (columnId: string) => {
+  const column = await getRepositories().boards.getColumn(columnId);
+  if (!column) notFound();
+  return { ...(await requireBoardAccess(column.boardId)), column };
+});
+
+export const requireTaskAccess = cache(async (taskId: string) => {
+  const task = await getRepositories().tasks.get(taskId);
+  if (!task) notFound();
+  return { ...(await requireBoardAccess(task.boardId)), task };
+});
+```
+
+- [ ] **Step 2: Shared helpers and onboarding**
+
+Create `src/server/actions/shared.ts`:
+
+```ts
+import "server-only";
+import { z } from "zod";
+import type { CreateWorkspaceInput, UpdateTaskInput } from "@/lib/domain";
+import { invalidTaskRef } from "@/lib/domain";
+import type { ActionResult, FormState } from "@/lib/forms";
+import { ForbiddenError } from "@/server/auth/permissions";
+import { ConflictError, NotFoundError, getRepositories } from "@/server/data";
+
+// Helpers for the "use server" modules in this folder (not an action module itself).
+
+export function conflictToFormState(error: unknown, values: Record<string, string>): FormState {
+  if (error instanceof ConflictError) return { fieldErrors: { [error.field]: [error.message] }, values };
+  throw error;
+}
+
+export function zodToFormState(error: z.ZodError, values: Record<string, string>): FormState {
+  return { fieldErrors: z.flattenError(error).fieldErrors, values };
+}
+
+/** Maps expected failures to a message for a toast; rethrows anything else. */
+export function toActionError(error: unknown): ActionResult {
+  if (error instanceof ConflictError || error instanceof ForbiddenError) return { ok: false, error: error.message };
+  if (error instanceof NotFoundError) return { ok: false, error: "This item no longer exists." };
+  if (error instanceof z.ZodError) return { ok: false, error: error.issues[0]?.message ?? "Invalid input" };
+  throw error;
+}
+
+/** Creates a workspace plus its default board (PRD §5.1). */
+export async function createWorkspaceWithBoard(input: CreateWorkspaceInput) {
+  const repos = getRepositories();
+  const workspace = await repos.workspaces.create(input);
+  const board = await repos.boards.create({ workspaceId: workspace.id, name: workspace.name, description: null });
+  return { workspace, board };
+}
+
+/** Rejects assignees who aren't team members and labels from other teams. */
+export async function assertTaskRefs(teamId: string, patch: Pick<UpdateTaskInput, "assignee" | "labelIds">) {
+  const repos = getRepositories();
+  const [members, labels] = await Promise.all([repos.memberships.list(teamId), repos.labels.listForTeam(teamId)]);
+  const field = invalidTaskRef(patch, {
+    memberIds: new Set(members.map((m) => m.userId)),
+    labelIds: new Set(labels.map((l) => l.id)),
+  });
+  if (field) throw new ConflictError(field, field === "assignee" ? "Pick a member of this team" : "Unknown label");
+}
+```
+
+Replace `src/server/actions/onboarding.ts`:
+
+```ts
+"use server";
+
+import { redirect } from "next/navigation";
+import { z } from "zod";
+import {
+  createInvitesInputSchema,
+  createTeamInputSchema,
+  createWorkspaceInputSchema,
+  parseEmailList,
+} from "@/lib/domain";
+import { formValues, type FormState } from "@/lib/forms";
+import { boardPath, onboardingInvitePath, onboardingWorkspacePath, teamPath } from "@/lib/paths";
+import { requireTeamMember } from "@/server/auth/guards";
+import { assertCan } from "@/server/auth/permissions";
+import { requireUser } from "@/server/auth/session";
+import { getRepositories } from "@/server/data";
+import { conflictToFormState, createWorkspaceWithBoard } from "./shared";
+
+export async function createTeamAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  const user = await requireUser();
+  const values = formValues(formData, ["name", "slug"]);
+  const parsed = createTeamInputSchema.safeParse(values);
+  if (!parsed.success) return { fieldErrors: z.flattenError(parsed.error).fieldErrors, values };
+
+  try {
+    await getRepositories().teams.create({ ...parsed.data, ownerId: user.id });
+  } catch (error) {
+    return conflictToFormState(error, values);
+  }
+  redirect(onboardingWorkspacePath(parsed.data.slug));
+}
+
+export async function createWorkspaceAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  const values = formValues(formData, ["teamSlug", "name", "keyPrefix"]);
+  const { team, membership } = await requireTeamMember(values.teamSlug);
+  assertCan(membership.role, "workspace:create");
+  const parsed = createWorkspaceInputSchema.safeParse({
+    teamId: team.id,
+    name: values.name,
+    keyPrefix: values.keyPrefix.toUpperCase(),
+  });
+  if (!parsed.success) return { fieldErrors: z.flattenError(parsed.error).fieldErrors, values };
+
+  let boardId: string;
+  try {
+    boardId = (await createWorkspaceWithBoard(parsed.data)).board.id;
+  } catch (error) {
+    return conflictToFormState(error, values);
+  }
+  redirect(onboardingInvitePath(team.slug, boardId));
+}
+
+export async function sendInvitesAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  const values = formValues(formData, ["teamSlug", "boardId", "emails"]);
+  const { user, team, membership } = await requireTeamMember(values.teamSlug);
+  assertCan(membership.role, "member:invite");
+  const parsed = createInvitesInputSchema.safeParse({
+    teamId: team.id,
+    emails: parseEmailList(values.emails),
+  });
+  // Errors on individual addresses (emails.3) flatten onto "emails".
+  if (!parsed.success) return { fieldErrors: z.flattenError(parsed.error).fieldErrors, values };
+
+  const invites = await getRepositories().invites.create({ ...parsed.data, invitedBy: user.id });
+  for (const invite of invites) {
+    // Invite emails are sent via Resend from M5; accepting invites arrives in M3.
+    console.info(`[invite] ${invite.email} → /invite/${invite.token}`);
+  }
+  redirect(values.boardId ? boardPath(team.slug, values.boardId) : teamPath(team.slug));
+}
+```
+
+- [ ] **Step 3: Action modules** (note `revalidatePath(…, "layout")` before redirects — gotcha 1)
+
+Create `src/server/actions/workspaces.ts`:
+
+```ts
+"use server";
+
+import { refresh, revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
+import { createWorkspaceInputSchema, updateWorkspaceInputSchema } from "@/lib/domain";
+import { formValues, type FormState } from "@/lib/forms";
+import { boardPath, teamPath } from "@/lib/paths";
+import { requireTeamMember, requireWorkspaceAccess } from "@/server/auth/guards";
+import { assertCan } from "@/server/auth/permissions";
+import { getRepositories } from "@/server/data";
+import { conflictToFormState, createWorkspaceWithBoard, zodToFormState } from "./shared";
+
+export async function createWorkspaceAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  const values = formValues(formData, ["teamSlug", "name", "keyPrefix"]);
+  const { team, membership } = await requireTeamMember(values.teamSlug);
+  assertCan(membership.role, "workspace:create");
+  const parsed = createWorkspaceInputSchema.safeParse({
+    teamId: team.id,
+    name: values.name,
+    keyPrefix: values.keyPrefix.toUpperCase(),
+  });
+  if (!parsed.success) return zodToFormState(parsed.error, values);
+
+  let boardId: string;
+  try {
+    boardId = (await createWorkspaceWithBoard(parsed.data)).board.id;
+  } catch (error) {
+    return conflictToFormState(error, values);
+  }
+  // Redirects keep the shared [team] layout; revalidate it so the sidebar shows the new workspace.
+  revalidatePath(teamPath(team.slug), "layout");
+  redirect(boardPath(team.slug, boardId));
+}
+
+export async function renameWorkspaceAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  const values = formValues(formData, ["workspaceId", "name"]);
+  const { membership } = await requireWorkspaceAccess(values.workspaceId);
+  assertCan(membership.role, "workspace:update");
+  const parsed = updateWorkspaceInputSchema.safeParse({ name: values.name });
+  if (!parsed.success) return zodToFormState(parsed.error, values);
+
+  await getRepositories().workspaces.update(values.workspaceId, parsed.data);
+  refresh();
+  return { ok: true };
+}
+
+export async function deleteWorkspaceAction(workspaceId: string): Promise<void> {
+  const { team, membership } = await requireWorkspaceAccess(workspaceId);
+  assertCan(membership.role, "workspace:delete");
+  await getRepositories().workspaces.delete(workspaceId);
+  revalidatePath(teamPath(team.slug), "layout");
+  redirect(teamPath(team.slug));
+}
+```
+
+Create `src/server/actions/boards.ts`:
+
+```ts
+"use server";
+
+import { refresh, revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
+import { columnNameSchema, createBoardInputSchema, updateBoardInputSchema } from "@/lib/domain";
+import { formValues, type ActionResult, type FormState } from "@/lib/forms";
+import { boardPath, teamPath } from "@/lib/paths";
+import { requireBoardAccess, requireColumnAccess, requireWorkspaceAccess } from "@/server/auth/guards";
+import { assertCan } from "@/server/auth/permissions";
+import { getRepositories } from "@/server/data";
+import { toActionError, zodToFormState } from "./shared";
+
+export async function createBoardAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  const values = formValues(formData, ["workspaceId", "name"]);
+  const { team, membership } = await requireWorkspaceAccess(values.workspaceId);
+  assertCan(membership.role, "board:create");
+  const parsed = createBoardInputSchema.safeParse({ workspaceId: values.workspaceId, name: values.name });
+  if (!parsed.success) return zodToFormState(parsed.error, values);
+
+  const board = await getRepositories().boards.create(parsed.data);
+  // Redirects keep the shared [team] layout; revalidate it so the sidebar lists the board.
+  revalidatePath(teamPath(team.slug), "layout");
+  redirect(boardPath(team.slug, board.id));
+}
+
+export async function updateBoardAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  const values = formValues(formData, ["boardId", "name", "description"]);
+  const { membership } = await requireBoardAccess(values.boardId);
+  assertCan(membership.role, "board:update");
+  const parsed = updateBoardInputSchema.safeParse({
+    name: values.name,
+    description: values.description.trim() || null,
+  });
+  if (!parsed.success) return zodToFormState(parsed.error, values);
+
+  await getRepositories().boards.update(values.boardId, parsed.data);
+  refresh();
+  return { ok: true };
+}
+
+export async function deleteBoardAction(boardId: string): Promise<void> {
+  const { team, membership } = await requireBoardAccess(boardId);
+  assertCan(membership.role, "board:delete");
+  await getRepositories().boards.delete(boardId);
+  revalidatePath(teamPath(team.slug), "layout");
+  redirect(teamPath(team.slug));
+}
+
+export async function addColumnAction(boardId: string, name: string): Promise<ActionResult> {
+  try {
+    const { membership } = await requireBoardAccess(boardId);
+    assertCan(membership.role, "column:manage");
+    await getRepositories().boards.createColumn(boardId, columnNameSchema.parse(name));
+  } catch (error) {
+    return toActionError(error);
+  }
+  refresh();
+  return { ok: true };
+}
+
+export async function renameColumnAction(columnId: string, name: string): Promise<ActionResult> {
+  try {
+    const { membership } = await requireColumnAccess(columnId);
+    assertCan(membership.role, "column:manage");
+    await getRepositories().boards.renameColumn(columnId, columnNameSchema.parse(name));
+  } catch (error) {
+    return toActionError(error);
+  }
+  refresh();
+  return { ok: true };
+}
+
+export async function moveColumnAction(columnId: string, index: number): Promise<ActionResult> {
+  try {
+    const { membership } = await requireColumnAccess(columnId);
+    assertCan(membership.role, "column:manage");
+    await getRepositories().boards.moveColumn(columnId, index);
+  } catch (error) {
+    return toActionError(error);
+  }
+  refresh();
+  return { ok: true };
+}
+
+export async function deleteColumnAction(columnId: string): Promise<ActionResult> {
+  try {
+    const { membership } = await requireColumnAccess(columnId);
+    assertCan(membership.role, "column:manage");
+    await getRepositories().boards.deleteColumn(columnId);
+  } catch (error) {
+    return toActionError(error);
+  }
+  refresh();
+  return { ok: true };
+}
+```
+
+Create `src/server/actions/tasks.ts`:
+
+```ts
+"use server";
+
+import { refresh } from "next/cache";
+import { createTaskInputSchema, updateTaskInputSchema, type UpdateTaskInput } from "@/lib/domain";
+import { formValues, type ActionResult, type FormState } from "@/lib/forms";
+import { requireBoardAccess, requireColumnAccess, requireTaskAccess } from "@/server/auth/guards";
+import { assertCan } from "@/server/auth/permissions";
+import { getRepositories } from "@/server/data";
+import { assertTaskRefs, conflictToFormState, toActionError, zodToFormState } from "./shared";
+
+export async function createTaskAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  const values = formValues(formData, ["boardId", "columnId", "title", "description", "priority", "assignee"]);
+  const { user, team, membership } = await requireBoardAccess(values.boardId);
+  assertCan(membership.role, "task:create");
+  const parsed = createTaskInputSchema.safeParse({
+    boardId: values.boardId,
+    columnId: values.columnId,
+    title: values.title,
+    description: values.description,
+    priority: values.priority || undefined,
+    assignee: values.assignee && values.assignee !== "none" ? { kind: "user", userId: values.assignee } : null,
+  });
+  if (!parsed.success) return zodToFormState(parsed.error, values);
+
+  try {
+    await assertTaskRefs(team.id, parsed.data);
+    await getRepositories().tasks.create({ ...parsed.data, createdBy: user.id });
+  } catch (error) {
+    return conflictToFormState(error, values);
+  }
+  refresh();
+  return { ok: true };
+}
+
+/** Quick-add from the top of a column: title only, inserted first. */
+export async function quickAddTaskAction(columnId: string, title: string): Promise<ActionResult> {
+  try {
+    const { user, membership, column } = await requireColumnAccess(columnId);
+    assertCan(membership.role, "task:create");
+    const input = createTaskInputSchema.parse({ boardId: column.boardId, columnId, title });
+    await getRepositories().tasks.create({ ...input, createdBy: user.id, placement: "start" });
+  } catch (error) {
+    return toActionError(error);
+  }
+  refresh();
+  return { ok: true };
+}
+
+export async function updateTaskAction(taskId: string, patch: UpdateTaskInput): Promise<ActionResult> {
+  try {
+    const { team, membership } = await requireTaskAccess(taskId);
+    assertCan(membership.role, "task:update");
+    const parsed = updateTaskInputSchema.parse(patch);
+    await assertTaskRefs(team.id, parsed);
+    await getRepositories().tasks.update(taskId, parsed);
+  } catch (error) {
+    return toActionError(error);
+  }
+  refresh();
+  return { ok: true };
+}
+
+/** Moves a task to `index` among the other tasks of `columnId` (see indexInFullList). */
+export async function moveTaskAction(taskId: string, columnId: string, index: number): Promise<ActionResult> {
+  try {
+    const { membership } = await requireTaskAccess(taskId);
+    assertCan(membership.role, "task:update");
+    await getRepositories().tasks.move(taskId, { columnId, index: Math.max(0, Math.trunc(index)) });
+  } catch (error) {
+    return toActionError(error);
+  }
+  refresh();
+  return { ok: true };
+}
+
+export async function deleteTaskAction(taskId: string): Promise<ActionResult> {
+  try {
+    const { membership } = await requireTaskAccess(taskId);
+    assertCan(membership.role, "task:delete");
+    await getRepositories().tasks.delete(taskId);
+  } catch (error) {
+    return toActionError(error);
+  }
+  refresh();
+  return { ok: true };
+}
+```
+
+Create `src/server/actions/comments.ts`:
+
+```ts
+"use server";
+
+import { refresh } from "next/cache";
+import { createCommentInputSchema } from "@/lib/domain";
+import { formValues, type ActionResult, type FormState } from "@/lib/forms";
+import { requireTaskAccess } from "@/server/auth/guards";
+import { ForbiddenError, assertCan, can } from "@/server/auth/permissions";
+import { getRepositories } from "@/server/data";
+import { toActionError, zodToFormState } from "./shared";
+
+export async function addCommentAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  const values = formValues(formData, ["taskId", "body"]);
+  const { user, membership } = await requireTaskAccess(values.taskId);
+  assertCan(membership.role, "comment:create");
+  const parsed = createCommentInputSchema.safeParse(values);
+  if (!parsed.success) return zodToFormState(parsed.error, values);
+
+  await getRepositories().comments.create({ ...parsed.data, author: { kind: "user", userId: user.id } });
+  refresh();
+  return { ok: true };
+}
+
+/** Authors can delete their own comments; owners and admins can delete any. */
+export async function deleteCommentAction(commentId: string): Promise<ActionResult> {
+  try {
+    const repos = getRepositories();
+    const comment = await repos.comments.get(commentId);
+    if (!comment) return { ok: false, error: "This item no longer exists." };
+    const { user, membership } = await requireTaskAccess(comment.taskId);
+    const isAuthor = comment.author.kind === "user" && comment.author.userId === user.id;
+    if (!isAuthor && !can(membership.role, "comment:moderate")) {
+      throw new ForbiddenError(membership.role, "comment:moderate");
+    }
+    await repos.comments.delete(commentId);
+  } catch (error) {
+    return toActionError(error);
+  }
+  refresh();
+  return { ok: true };
+}
+```
+
+- [ ] **Step 4: Verify**
+
+Run: `pnpm test && pnpm lint && pnpm typecheck && pnpm build`
+Expected: 147 tests pass; build clean.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add -A
+git commit -m "feat(actions): add workspace, board, column, task and comment server actions"
+```
+
+---
+
+### Task 5: UI foundations — deps, shadcn, task atoms, board state
+
+**Files:**
+- Create: `src/components/ui/{select,tabs,alert-dialog}.tsx` (shadcn), `src/components/tasks/priority.tsx`, `src/components/tasks/label-chip.tsx`, `src/components/tasks/member-avatar.tsx`, `src/components/tasks/markdown.tsx`, `src/components/forms/use-form-action.ts`, `src/components/board/board-state.ts` (+ `.test.ts`)
+- Modify: `package.json`, `src/app/globals.css`, `src/components/forms/fields.tsx`
+
+**Interfaces:**
+- Produces: `PRIORITY_META`, `<PriorityIcon>`; `<LabelDot>`, `<LabelChip>`; `type MemberOption`, `<MemberAvatar>`; `<Markdown>` (GFM, no raw HTML); `useFormAction(action, onSuccess?)`; `<SelectField>`; `taskReducer`/`TaskAction`, `columnReducer`/`ColumnAction`, `groupTasks(columns, tasks)`, `planTaskMove(tasks, taskId, columnId, visibleIdsAfterDrop) → { index, position } | null`.
+
+- [ ] **Step 1: Dependencies and shadcn components** (gotcha 9)
+
+```bash
+pnpm add @dnd-kit/core @dnd-kit/sortable @dnd-kit/utilities react-markdown remark-gfm
+pnpm dlx shadcn@4.21.0 add select tabs alert-dialog -y --overwrite
+pnpm remove cn
+grep -rl 'from "cn"' src | xargs sed -i '' 's#from "cn"#from "@/lib/utils"#'
+git status --short src/components/ui   # expect only the three new files
+```
+
+- [ ] **Step 2: Label colour tokens** — in `src/app/globals.css` add these lines right after `:root {`:
+
+```css
+  --label-gray: oklch(0.55 0 0);
+  --label-red: oklch(0.6 0.2 25);
+  --label-orange: oklch(0.68 0.17 50);
+  --label-yellow: oklch(0.75 0.15 90);
+  --label-green: oklch(0.62 0.15 150);
+  --label-blue: oklch(0.58 0.17 250);
+  --label-purple: oklch(0.58 0.2 300);
+  --label-pink: oklch(0.65 0.2 350);
+```
+
+and these right after `.dark {`:
+
+```css
+  --label-gray: oklch(0.65 0 0);
+  --label-red: oklch(0.68 0.19 25);
+  --label-orange: oklch(0.74 0.16 50);
+  --label-yellow: oklch(0.82 0.14 90);
+  --label-green: oklch(0.72 0.15 150);
+  --label-blue: oklch(0.68 0.15 250);
+  --label-purple: oklch(0.68 0.17 300);
+  --label-pink: oklch(0.72 0.17 350);
+```
+
+- [ ] **Step 3: Task atoms and form helpers**
+
+Create `src/components/tasks/priority.tsx`:
+
+```tsx
+import { Minus, SignalHigh, SignalLow, SignalMedium, TriangleAlert, type LucideIcon } from "lucide-react";
+import type { Priority } from "@/lib/domain";
+import { cn } from "@/lib/utils";
+
+export const PRIORITY_META: Record<Priority, { label: string; icon: LucideIcon }> = {
+  none: { label: "No priority", icon: Minus },
+  low: { label: "Low", icon: SignalLow },
+  medium: { label: "Medium", icon: SignalMedium },
+  high: { label: "High", icon: SignalHigh },
+  urgent: { label: "Urgent", icon: TriangleAlert },
+};
+
+export function PriorityIcon({ priority, className }: { priority: Priority; className?: string }) {
+  const { label, icon: Icon } = PRIORITY_META[priority];
+  return (
+    <Icon
+      role="img"
+      aria-label={label}
+      className={cn(
+        "size-4 shrink-0",
+        priority === "urgent" ? "text-destructive" : "text-muted-foreground",
+        className,
+      )}
+    />
+  );
+}
+```
+
+Create `src/components/tasks/label-chip.tsx`:
+
+```tsx
+import type { Label } from "@/lib/domain";
+
+export function LabelDot({ color }: { color: Label["color"] }) {
+  return (
+    <span
+      aria-hidden
+      className="size-2 shrink-0 rounded-full"
+      style={{ backgroundColor: `var(--label-${color})` }}
+    />
+  );
+}
+
+export function LabelChip({ label }: { label: Pick<Label, "name" | "color"> }) {
+  return (
+    <span className="text-muted-foreground inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs">
+      <LabelDot color={label.color} />
+      {label.name}
+    </span>
+  );
+}
+```
+
+Create `src/components/tasks/member-avatar.tsx`:
+
+```tsx
+import { cn } from "@/lib/utils";
+
+/** Minimal member shape passed from server pages to client components. */
+export type MemberOption = { id: string; name: string; email: string };
+
+function initials(name: string) {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join("");
+}
+
+export function MemberAvatar({ member, className }: { member: Pick<MemberOption, "name">; className?: string }) {
+  return (
+    <span
+      title={member.name}
+      className={cn(
+        "bg-muted text-muted-foreground inline-flex size-6 shrink-0 items-center justify-center rounded-full text-[10px] font-medium",
+        className,
+      )}
+    >
+      {initials(member.name)}
+    </span>
+  );
+}
+```
+
+Create `src/components/tasks/markdown.tsx`:
+
+```tsx
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+
+// react-markdown never renders raw HTML and strips unsafe URLs, so user input is safe here.
+export function Markdown({ children }: { children: string }) {
+  return (
+    <div className="text-sm leading-relaxed break-words [&_a]:underline [&_a]:underline-offset-4 [&_blockquote]:text-muted-foreground [&_blockquote]:border-l-2 [&_blockquote]:pl-3 [&_code]:bg-muted [&_code]:rounded [&_code]:px-1 [&_code]:font-mono [&_h1]:mt-3 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:mt-3 [&_h2]:font-semibold [&_h3]:mt-2 [&_h3]:font-medium [&_input]:mr-1.5 [&_li]:my-0.5 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-2 [&_pre]:bg-muted [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:p-3 [&_ul]:list-disc [&_ul]:pl-5 [&_ul:has(input)]:list-none [&_ul:has(input)]:pl-0">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{children}</ReactMarkdown>
+    </div>
+  );
+}
+```
+
+Create `src/components/forms/use-form-action.ts`:
+
+```ts
+"use client";
+
+import { startTransition, useActionState } from "react";
+import { initialFormState, type FormState } from "@/lib/forms";
+
+/**
+ * useActionState for dialog forms: runs `onSuccess` (e.g. close the dialog)
+ * inside a transition so it lands in the same frame as the refreshed page.
+ */
+export function useFormAction(
+  action: (prev: FormState, formData: FormData) => Promise<FormState>,
+  onSuccess?: () => void,
+) {
+  return useActionState(async (prev: FormState, formData: FormData) => {
+    const next = await action(prev, formData);
+    if (next.ok && onSuccess) startTransition(onSuccess);
+    return next;
+  }, initialFormState);
+}
+```
+
+Replace `src/components/forms/fields.tsx` (adds `SelectField`):
+
+```tsx
+import type { ComponentProps, ReactNode } from "react";
+import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+
+type TextFieldProps = ComponentProps<typeof Input> & {
+  name: string;
+  label: string;
+  errors?: string[];
+  description?: ReactNode;
+};
+
+export function TextField({ name, label, errors, description, ...props }: TextFieldProps) {
+  const invalid = Boolean(errors?.length);
+  return (
+    <Field data-invalid={invalid}>
+      <FieldLabel htmlFor={name}>{label}</FieldLabel>
+      <Input id={name} name={name} aria-invalid={invalid} {...props} />
+      {description && <FieldDescription>{description}</FieldDescription>}
+      <FieldError>{errors?.[0]}</FieldError>
+    </Field>
+  );
+}
+
+export function FormError({ message }: { message?: string }) {
+  if (!message) return null;
+  return (
+    <p role="alert" className="text-destructive text-sm">
+      {message}
+    </p>
+  );
+}
+
+/** A labelled Radix Select that submits with its form under `name`. */
+export function SelectField({
+  name,
+  label,
+  options,
+  defaultValue,
+}: {
+  name: string;
+  label: string;
+  options: { value: string; label: string }[];
+  defaultValue: string;
+}) {
+  return (
+    <Field>
+      <FieldLabel htmlFor={name}>{label}</FieldLabel>
+      <Select name={name} defaultValue={defaultValue}>
+        <SelectTrigger id={name} className="w-full">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((option) => (
+            <SelectItem key={option.value} value={option.value}>
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </Field>
+  );
+}
+```
+
+- [ ] **Step 4: Board state — write the failing test**
+
+Create `src/components/board/board-state.test.ts`:
+
+```ts
+import { describe, expect, it } from "vitest";
+import type { Column, Task } from "@/lib/domain";
+import { columnReducer, groupTasks, planTaskMove, taskReducer } from "./board-state";
+
+function task(id: string, columnId: string, position: string): Task {
+  return {
+    id,
+    boardId: "b",
+    columnId,
+    number: 1,
+    key: `ENG-${id}`,
+    title: id,
+    description: "",
+    priority: "none",
+    assignee: null,
+    labelIds: [],
+    dueDate: null,
+    position,
+    parentId: null,
+    createdBy: "u",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+}
+
+const column = (id: string, position: string): Column => ({ id, boardId: "b", name: id, position });
+
+const TASKS = [task("a", "todo", "a0"), task("b", "todo", "a1"), task("c", "todo", "a2"), task("d", "done", "a0")];
+
+describe("groupTasks", () => {
+  it("buckets tasks by column in position order, with empty columns present", () => {
+    const grouped = groupTasks([column("todo", "a0"), column("done", "a1"), column("empty", "a2")], [...TASKS].reverse());
+    expect(grouped.todo.map((t) => t.id)).toEqual(["a", "b", "c"]);
+    expect(grouped.done.map((t) => t.id)).toEqual(["d"]);
+    expect(grouped.empty).toEqual([]);
+  });
+});
+
+describe("taskReducer", () => {
+  it("moves, updates, adds and deletes", () => {
+    const moved = taskReducer(TASKS, { type: "move", id: "a", columnId: "done", position: "a1" });
+    expect(moved.find((t) => t.id === "a")).toMatchObject({ columnId: "done", position: "a1" });
+    const updated = taskReducer(TASKS, { type: "update", id: "b", patch: { priority: "high" } });
+    expect(updated.find((t) => t.id === "b")?.priority).toBe("high");
+    expect(taskReducer(TASKS, { type: "add", task: task("e", "todo", "Zz") })).toHaveLength(5);
+    expect(taskReducer(TASKS, { type: "delete", id: "a" }).map((t) => t.id)).toEqual(["b", "c", "d"]);
+  });
+});
+
+describe("columnReducer", () => {
+  const columns = [column("x", "a0"), column("y", "a1")];
+
+  it("keeps columns sorted after a move and supports rename/add/delete", () => {
+    expect(columnReducer(columns, { type: "move", id: "y", position: "Zz" }).map((c) => c.id)).toEqual(["y", "x"]);
+    expect(columnReducer(columns, { type: "rename", id: "x", name: "X" })[0].name).toBe("X");
+    expect(columnReducer(columns, { type: "add", column: column("z", "a2") }).map((c) => c.id)).toEqual(["x", "y", "z"]);
+    expect(columnReducer(columns, { type: "delete", id: "x" }).map((c) => c.id)).toEqual(["y"]);
+  });
+});
+
+describe("planTaskMove", () => {
+  it("computes index and a position between the new neighbours", () => {
+    const plan = planTaskMove(TASKS, "c", "todo", ["a", "c", "b"]);
+    expect(plan?.index).toBe(1);
+    expect(plan!.position > "a0" && plan!.position < "a1").toBe(true);
+  });
+
+  it("moves across columns", () => {
+    expect(planTaskMove(TASKS, "a", "done", ["d", "a"])).toMatchObject({ index: 1 });
+  });
+
+  it("returns null when the task ends where it started", () => {
+    expect(planTaskMove(TASKS, "b", "todo", ["a", "b", "c"])).toBeNull();
+  });
+
+  it("respects hidden (filtered-out) tasks", () => {
+    // Only a and c visible; c dropped first → lands before a in the full list.
+    expect(planTaskMove(TASKS, "c", "todo", ["c", "a"])).toMatchObject({ index: 0 });
+  });
+});
+```
+
+Run: `pnpm test src/components/board`
+Expected: FAIL — `Failed to resolve import "./board-state"`.
+
+- [ ] **Step 5: Implement**
+
+Create `src/components/board/board-state.ts`:
+
+```ts
+import { byPosition, indexInFullList, positionAt, type Column, type Task } from "@/lib/domain";
+
+// Pure helpers behind the board's optimistic UI (useOptimistic reducers) and drag & drop.
+
+export type TaskAction =
+  | { type: "move"; id: string; columnId: string; position: string }
+  | { type: "update"; id: string; patch: Partial<Task> }
+  | { type: "add"; task: Task }
+  | { type: "delete"; id: string };
+
+export function taskReducer(tasks: Task[], action: TaskAction): Task[] {
+  switch (action.type) {
+    case "move":
+      return tasks.map((t) =>
+        t.id === action.id ? { ...t, columnId: action.columnId, position: action.position } : t,
+      );
+    case "update":
+      return tasks.map((t) => (t.id === action.id ? { ...t, ...action.patch } : t));
+    case "add":
+      return [...tasks, action.task];
+    case "delete":
+      return tasks.filter((t) => t.id !== action.id);
+  }
+}
+
+export type ColumnAction =
+  | { type: "move"; id: string; position: string }
+  | { type: "rename"; id: string; name: string }
+  | { type: "add"; column: Column }
+  | { type: "delete"; id: string };
+
+export function columnReducer(columns: Column[], action: ColumnAction): Column[] {
+  switch (action.type) {
+    case "move":
+      return columns.map((c) => (c.id === action.id ? { ...c, position: action.position } : c)).sort(byPosition);
+    case "rename":
+      return columns.map((c) => (c.id === action.id ? { ...c, name: action.name } : c));
+    case "add":
+      return [...columns, action.column].sort(byPosition);
+    case "delete":
+      return columns.filter((c) => c.id !== action.id);
+  }
+}
+
+/** Tasks per column id, each list in position order; every column gets a list. */
+export function groupTasks(columns: Column[], tasks: Task[]): Record<string, Task[]> {
+  const grouped: Record<string, Task[]> = Object.fromEntries(columns.map((c) => [c.id, []]));
+  for (const task of [...tasks].sort(byPosition)) grouped[task.columnId]?.push(task);
+  return grouped;
+}
+
+/**
+ * Where `taskId` lands when dropped into `columnId`, given the column's visible
+ * ids after the drop (filters may hide some tasks). Returns the index the
+ * server expects (among the column's other tasks) and the matching position,
+ * or null if the task ends where it started.
+ */
+export function planTaskMove(
+  tasks: Task[],
+  taskId: string,
+  columnId: string,
+  visibleIdsAfterDrop: string[],
+): { index: number; position: string } | null {
+  const task = tasks.find((t) => t.id === taskId);
+  if (!task) return null;
+  const others = tasks.filter((t) => t.columnId === columnId && t.id !== taskId).sort(byPosition);
+  const index = indexInFullList(
+    others.map((t) => t.id),
+    visibleIdsAfterDrop,
+    taskId,
+  );
+  if (task.columnId === columnId && others.filter((t) => t.position < task.position).length === index) {
+    return null;
+  }
+  return { index, position: positionAt(others.map((t) => t.position), index) };
+}
+```
+
+- [ ] **Step 6: Verify**
+
+Run: `pnpm test && pnpm lint && pnpm typecheck`
+Expected: 154 tests pass (17 files).
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add -A
+git commit -m "feat(ui): add task atoms, label tokens and optimistic board state"
+```
+
+---
+
+### Task 6: The board — Kanban, quick-add, dialog, sheet, filters
+
+**Files:**
+- Create: `src/components/board/task-card.tsx`, `inline-input.tsx`, `board-column.tsx`, `board-toolbar.tsx`, `create-task-dialog.tsx`, `task-sheet.tsx`, `board-header.tsx`, `board-view.tsx` (all in `src/components/board/`)
+- Modify: `src/app/[team]/board/[boardId]/page.tsx`
+
+**Interfaces:**
+- Consumes: Tasks 4–5.
+- Produces: `<BoardView>`. Accessible names used by e2e: columns are `region`s named after the column (`aria-busy` while a draft); cards are `article`s with the title as a `link`; buttons **Add task to {column}**, **Column actions for {column}** (menu: **Rename**, **Delete column**), **Reorder {column}**, **Add column**, **Board actions** (menu: **Edit board**, **Delete board**), **New task**, **Assignee** / **Priority** / **Labels** filter menus, **Clear filters**; inputs **New task in {column}**, **New column name**, **Column name**, **Search tasks**; the create dialog **New task** (button **Create task**); the sheet is a dialog named after the task with comboboxes **Status**, **Priority**, **Assignee**, button **Labels**, inputs **Title**, **Due date**, **Description** (tabs **Write**/**Preview**, button **Save description**), **Comment** (button **Comment**), **Delete task** → alertdialog **Delete**. The board root is `data-slot="board"` with `aria-busy` while saving (gotcha 2).
+
+- [ ] **Step 1: Cards, inline inputs and columns** (gotchas 3 and 7)
+
+Create `src/components/board/task-card.tsx`:
+
+```tsx
+"use client";
+
+import { useSortable } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import { CalendarDays } from "lucide-react";
+import Link from "next/link";
+import { LabelChip } from "@/components/tasks/label-chip";
+import { MemberAvatar, type MemberOption } from "@/components/tasks/member-avatar";
+import { PriorityIcon } from "@/components/tasks/priority";
+import type { Label, Task } from "@/lib/domain";
+import { cn } from "@/lib/utils";
+
+type CardProps = {
+  task: Task;
+  href: string;
+  labels: Label[];
+  assignee: MemberOption | undefined;
+};
+
+export function TaskCardView({ task, href, labels, assignee, className }: CardProps & { className?: string }) {
+  const hasMeta = labels.length > 0 || assignee || task.dueDate;
+  return (
+    <article
+      aria-busy={task.id.startsWith("draft-")}
+      className={cn(
+        "bg-card hover:border-ring/60 relative space-y-2 rounded-md border p-3 text-sm shadow-xs transition-colors",
+        className,
+      )}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-muted-foreground font-mono text-xs">{task.key}</span>
+        <PriorityIcon priority={task.priority} />
+      </div>
+      {/* Stretched link: the whole card opens the task; drags start from the card. */}
+      <Link href={href} scroll={false} draggable={false} className="block font-medium after:absolute after:inset-0">
+        {task.title}
+      </Link>
+      {hasMeta && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {labels.map((label) => (
+            <LabelChip key={label.id} label={label} />
+          ))}
+          {task.dueDate && (
+            <span className="text-muted-foreground inline-flex items-center gap-1 text-xs">
+              <CalendarDays className="size-3" />
+              {task.dueDate}
+            </span>
+          )}
+          {assignee && <MemberAvatar member={assignee} className="ml-auto" />}
+        </div>
+      )}
+    </article>
+  );
+}
+
+export function SortableTaskCard(props: CardProps) {
+  const { setNodeRef, attributes, listeners, transform, transition, isDragging } = useSortable({
+    id: props.task.id,
+    data: { type: "task" },
+    // Optimistic quick-add drafts have no server id yet.
+    disabled: props.task.id.startsWith("draft-"),
+  });
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={{ transform: CSS.Translate.toString(transform), transition }}
+      className={cn("touch-none", isDragging && "opacity-40")}
+      {...attributes}
+      {...listeners}
+    >
+      <TaskCardView {...props} />
+    </div>
+  );
+}
+```
+
+Create `src/components/board/inline-input.tsx`:
+
+```tsx
+"use client";
+
+import { useState, type ComponentProps } from "react";
+import { Input } from "@/components/ui/input";
+
+/**
+ * A text input that commits on Enter (and optionally on blur) and cancels on
+ * Escape. Used for quick-add, new columns and column renames.
+ */
+export function InlineInput({
+  initialValue = "",
+  onSubmit,
+  onCancel,
+  submitOnBlur = false,
+  keepOpen = false,
+  ...props
+}: Omit<ComponentProps<typeof Input>, "onSubmit"> & {
+  initialValue?: string;
+  onSubmit: (value: string) => void;
+  onCancel: () => void;
+  submitOnBlur?: boolean;
+  /** Clear and stay open after submitting (rapid entry). */
+  keepOpen?: boolean;
+}) {
+  const [value, setValue] = useState(initialValue);
+
+  function submit() {
+    const trimmed = value.trim();
+    if (!trimmed) return onCancel();
+    onSubmit(trimmed);
+    if (keepOpen) setValue("");
+  }
+
+  return (
+    <Input
+      autoFocus
+      value={value}
+      onChange={(event) => setValue(event.target.value)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          submit();
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          onCancel();
+        }
+      }}
+      onBlur={() => (submitOnBlur && value.trim() ? submit() : onCancel())}
+      {...props}
+    />
+  );
+}
+```
+
+Create `src/components/board/board-column.tsx`:
+
+```tsx
+"use client";
+
+import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import { Ellipsis, GripVertical, Plus } from "lucide-react";
+import { useState, type ReactNode } from "react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import type { Column } from "@/lib/domain";
+import { cn } from "@/lib/utils";
+import { InlineInput } from "./inline-input";
+
+type BoardColumnProps = {
+  column: Column;
+  /** Ids rendered in this column, in order (visible tasks only). */
+  taskIds: string[];
+  /** All tasks in the column, including filtered-out ones (gates column delete). */
+  taskCount: number;
+  /** Whether board filters are hiding some tasks. */
+  filtered: boolean;
+  canManage: boolean;
+  renderTask: (taskId: string) => ReactNode;
+  onQuickAdd: (title: string) => void;
+  onRename: (name: string) => void;
+  onDelete: () => void;
+};
+
+export function BoardColumn({
+  column,
+  taskIds,
+  taskCount,
+  filtered,
+  canManage,
+  renderTask,
+  onQuickAdd,
+  onRename,
+  onDelete,
+}: BoardColumnProps) {
+  const [adding, setAdding] = useState(false);
+  // Optimistically added columns have no server id until the add completes.
+  const isDraft = column.id.startsWith("draft-");
+  const canEdit = canManage && !isDraft;
+  const [renaming, setRenaming] = useState(false);
+  const { setNodeRef, setActivatorNodeRef, attributes, listeners, transform, transition, isDragging } =
+    useSortable({
+      id: column.id,
+      data: { type: "column" },
+      // Everyone can drop tasks here; only managers can drag the column itself.
+      disabled: { draggable: !canEdit, droppable: isDraft },
+    });
+
+  return (
+    <section
+      ref={setNodeRef}
+      aria-label={column.name}
+      aria-busy={isDraft}
+      style={{ transform: CSS.Translate.toString(transform), transition }}
+      className={cn("bg-muted/40 flex w-72 shrink-0 flex-col rounded-lg border", isDragging && "opacity-50")}
+    >
+      <header className="flex items-center gap-1.5 px-2 pt-2 pb-1">
+        {canEdit && (
+          <button
+            ref={setActivatorNodeRef}
+            type="button"
+            aria-label={`Reorder ${column.name}`}
+            className="text-muted-foreground hover:text-foreground cursor-grab touch-none"
+            {...attributes}
+            {...listeners}
+          >
+            <GripVertical className="size-4" />
+          </button>
+        )}
+        {renaming ? (
+          <InlineInput
+            aria-label="Column name"
+            className="h-7"
+            initialValue={column.name}
+            submitOnBlur
+            onSubmit={(name) => {
+              setRenaming(false);
+              if (name !== column.name) onRename(name);
+            }}
+            onCancel={() => setRenaming(false)}
+          />
+        ) : (
+          <h2 className="truncate text-sm font-medium">{column.name}</h2>
+        )}
+        <Badge variant="secondary">{taskIds.length}</Badge>
+        <div className="ml-auto flex items-center">
+          {!isDraft && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-7"
+              aria-label={`Add task to ${column.name}`}
+              onClick={() => setAdding(true)}
+            >
+              <Plus />
+            </Button>
+          )}
+          {canEdit && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" className="size-7" aria-label={`Column actions for ${column.name}`}>
+                  <Ellipsis />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onSelect={() => setRenaming(true)}>Rename</DropdownMenuItem>
+                <DropdownMenuItem variant="destructive" disabled={taskCount > 0} onSelect={onDelete}>
+                  {taskCount > 0 ? "Delete (move tasks first)" : "Delete column"}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+        </div>
+      </header>
+      {adding && (
+        <div className="px-2 pt-1">
+          <InlineInput
+            aria-label={`New task in ${column.name}`}
+            placeholder="Task title, then Enter"
+            keepOpen
+            onSubmit={onQuickAdd}
+            onCancel={() => setAdding(false)}
+          />
+        </div>
+      )}
+      <SortableContext items={taskIds} strategy={verticalListSortingStrategy}>
+        <div className="flex min-h-24 flex-1 flex-col gap-2 overflow-y-auto p-2">
+          {taskIds.map(renderTask)}
+          {taskIds.length === 0 && (
+            <p className="text-muted-foreground py-6 text-center text-xs">
+              {filtered && taskCount > 0 ? "No matching tasks" : "No tasks"}
+            </p>
+          )}
+        </div>
+      </SortableContext>
+    </section>
+  );
+}
+
+export function AddColumn({ onAdd }: { onAdd: (name: string) => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="w-72 shrink-0">
+      {open ? (
+        <InlineInput
+          aria-label="New column name"
+          placeholder="Column name, then Enter"
+          onSubmit={(name) => {
+            onAdd(name);
+            setOpen(false);
+          }}
+          onCancel={() => setOpen(false)}
+        />
+      ) : (
+        <Button variant="ghost" className="text-muted-foreground w-full justify-start" onClick={() => setOpen(true)}>
+          <Plus />
+          Add column
+        </Button>
+      )}
+    </div>
+  );
+}
+```
+
+- [ ] **Step 2: Toolbar, create dialog and task sheet** (gotchas 4 and 6)
+
+Create `src/components/board/board-toolbar.tsx`:
+
+```tsx
+"use client";
+
+import { Plus, Search, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { LabelDot } from "@/components/tasks/label-chip";
+import type { MemberOption } from "@/components/tasks/member-avatar";
+import { PRIORITY_META, PriorityIcon } from "@/components/tasks/priority";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
+import { EMPTY_FILTERS, PRIORITIES, isFiltered, type BoardFilters, type Label } from "@/lib/domain";
+
+function toggle<T>(list: T[], item: T): T[] {
+  return list.includes(item) ? list.filter((x) => x !== item) : [...list, item];
+}
+
+function FilterTrigger({ label, count }: { label: string; count: number }) {
+  return (
+    <DropdownMenuTrigger asChild>
+      <Button variant="outline" size="sm">
+        {label}
+        {count > 0 && <Badge variant="secondary">{count}</Badge>}
+      </Button>
+    </DropdownMenuTrigger>
+  );
+}
+
+export function BoardToolbar({
+  filters,
+  onChange,
+  members,
+  labels,
+  onNewTask,
+  saving,
+}: {
+  filters: BoardFilters;
+  onChange: (filters: BoardFilters) => void;
+  members: MemberOption[];
+  labels: Label[];
+  onNewTask: () => void;
+  saving: boolean;
+}) {
+  // Search is uncontrolled and debounced into the URL; the timer reads the
+  // latest filters so a filter changed meanwhile isn't reverted.
+  const latest = useRef(filters);
+  useEffect(() => {
+    latest.current = filters;
+  });
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const [searchKey, setSearchKey] = useState(0);
+
+  const keepOpen = (event: Event) => event.preventDefault();
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <div className="relative">
+        <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2" />
+        <Input
+          aria-label="Search tasks"
+          placeholder="Search tasks"
+          className="h-8 w-48 pl-8"
+          key={searchKey}
+          defaultValue={filters.query}
+          onChange={(event) => {
+            const query = event.target.value.trim();
+            clearTimeout(timer.current);
+            timer.current = setTimeout(() => onChange({ ...latest.current, query }), 250);
+          }}
+        />
+      </div>
+
+      <DropdownMenu>
+        <FilterTrigger label="Assignee" count={filters.assignee === "any" ? 0 : 1} />
+        <DropdownMenuContent align="start">
+          <DropdownMenuRadioGroup
+            value={filters.assignee}
+            onValueChange={(assignee) => onChange({ ...filters, assignee })}
+          >
+            <DropdownMenuRadioItem value="any">Anyone</DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="me">Me</DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="none">Unassigned</DropdownMenuRadioItem>
+            {members.map((member) => (
+              <DropdownMenuRadioItem key={member.id} value={member.id}>
+                {member.name}
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      <DropdownMenu>
+        <FilterTrigger label="Priority" count={filters.priorities.length} />
+        <DropdownMenuContent align="start">
+          {PRIORITIES.map((priority) => (
+            <DropdownMenuCheckboxItem
+              key={priority}
+              checked={filters.priorities.includes(priority)}
+              onSelect={keepOpen}
+              onCheckedChange={() => onChange({ ...filters, priorities: toggle(filters.priorities, priority) })}
+            >
+              <PriorityIcon priority={priority} />
+              {PRIORITY_META[priority].label}
+            </DropdownMenuCheckboxItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      <DropdownMenu>
+        <FilterTrigger label="Labels" count={filters.labelIds.length} />
+        <DropdownMenuContent align="start">
+          {labels.map((label) => (
+            <DropdownMenuCheckboxItem
+              key={label.id}
+              checked={filters.labelIds.includes(label.id)}
+              onSelect={keepOpen}
+              onCheckedChange={() => onChange({ ...filters, labelIds: toggle(filters.labelIds, label.id) })}
+            >
+              <LabelDot color={label.color} />
+              {label.name}
+            </DropdownMenuCheckboxItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      {isFiltered(filters) && (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => {
+            clearTimeout(timer.current);
+            setSearchKey((key) => key + 1);
+            onChange(EMPTY_FILTERS);
+          }}
+        >
+          <X />
+          Clear filters
+        </Button>
+      )}
+
+      <span role="status" className="text-muted-foreground ml-auto text-xs">
+        {saving ? "Saving…" : ""}
+      </span>
+      <Button size="sm" onClick={onNewTask}>
+        <Plus />
+        New task
+        <kbd className="bg-primary-foreground/20 rounded px-1 font-mono text-[10px]">C</kbd>
+      </Button>
+    </div>
+  );
+}
+```
+
+Create `src/components/board/create-task-dialog.tsx`:
+
+```tsx
+"use client";
+
+import { toast } from "sonner";
+import { FormError, SelectField, TextField } from "@/components/forms/fields";
+import { useFormAction } from "@/components/forms/use-form-action";
+import type { MemberOption } from "@/components/tasks/member-avatar";
+import { PRIORITY_META } from "@/components/tasks/priority";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Textarea } from "@/components/ui/textarea";
+import { PRIORITIES, type Column } from "@/lib/domain";
+import { createTaskAction } from "@/server/actions/tasks";
+
+type CreateTaskDialogProps = {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  boardId: string;
+  columns: Column[];
+  members: MemberOption[];
+  defaultColumnId: string;
+};
+
+export function CreateTaskDialog({ open, onOpenChange, ...props }: CreateTaskDialogProps) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg">
+        {open && <CreateTaskForm {...props} onDone={() => onOpenChange(false)} />}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function CreateTaskForm({
+  boardId,
+  columns,
+  members,
+  defaultColumnId,
+  onDone,
+}: Omit<CreateTaskDialogProps, "open" | "onOpenChange"> & { onDone: () => void }) {
+  const [state, action, pending] = useFormAction(createTaskAction, () => {
+    onDone();
+    toast.success("Task created");
+  });
+
+  return (
+    <form action={action} className="space-y-6">
+      <DialogHeader>
+        <DialogTitle>New task</DialogTitle>
+        <DialogDescription>Press C on the board to open this anytime.</DialogDescription>
+      </DialogHeader>
+      <input type="hidden" name="boardId" value={boardId} />
+      <FieldGroup>
+        <TextField
+          name="title"
+          label="Title"
+          required
+          autoFocus
+          defaultValue={state.values?.title}
+          errors={state.fieldErrors?.title}
+        />
+        <Field>
+          <FieldLabel htmlFor="description">Description</FieldLabel>
+          <Textarea
+            id="description"
+            name="description"
+            rows={4}
+            placeholder="Markdown supported"
+            defaultValue={state.values?.description}
+          />
+        </Field>
+        <div className="grid gap-4 sm:grid-cols-3">
+          <SelectField
+            name="columnId"
+            label="Status"
+            defaultValue={state.values?.columnId || defaultColumnId}
+            options={columns.map((column) => ({ value: column.id, label: column.name }))}
+          />
+          <SelectField
+            name="priority"
+            label="Priority"
+            defaultValue={state.values?.priority || "none"}
+            options={PRIORITIES.map((priority) => ({ value: priority, label: PRIORITY_META[priority].label }))}
+          />
+          <SelectField
+            name="assignee"
+            label="Assignee"
+            defaultValue={state.values?.assignee || "none"}
+            options={[
+              { value: "none", label: "Unassigned" },
+              ...members.map((member) => ({ value: member.id, label: member.name })),
+            ]}
+          />
+        </div>
+      </FieldGroup>
+      <FormError message={state.fieldErrors?.assignee?.[0] ?? state.formError} />
+      <DialogFooter>
+        <Button type="submit" disabled={pending}>
+          Create task
+        </Button>
+      </DialogFooter>
+    </form>
+  );
+}
+```
+
+Create `src/components/board/task-sheet.tsx`:
+
+```tsx
+"use client";
+
+import { Trash2 } from "lucide-react";
+import { useRef, useState } from "react";
+import { toast } from "sonner";
+import { FormError } from "@/components/forms/fields";
+import { useFormAction } from "@/components/forms/use-form-action";
+import { LabelChip, LabelDot } from "@/components/tasks/label-chip";
+import { Markdown } from "@/components/tasks/markdown";
+import { MemberAvatar, type MemberOption } from "@/components/tasks/member-avatar";
+import { PRIORITY_META, PriorityIcon } from "@/components/tasks/priority";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
+import { PRIORITIES, type Column, type Comment, type Label, type Task, type UpdateTaskInput } from "@/lib/domain";
+import { addCommentAction, deleteCommentAction } from "@/server/actions/comments";
+
+type TaskSheetProps = {
+  task: Task | undefined;
+  columns: Column[];
+  members: MemberOption[];
+  labels: Label[];
+  comments: Comment[];
+  currentUserId: string;
+  canModerate: boolean;
+  onClose: () => void;
+  onUpdate: (patch: UpdateTaskInput) => void;
+  onMove: (columnId: string) => void;
+  onDelete: () => void;
+};
+
+export function TaskSheet({ task, onClose, ...props }: TaskSheetProps) {
+  const contentRef = useRef<HTMLDivElement>(null);
+  return (
+    <Sheet open={Boolean(task)} onOpenChange={(open) => !open && onClose()}>
+      <SheetContent
+        ref={contentRef}
+        tabIndex={-1}
+        // Radix would focus (and select) the title input; start on the panel instead.
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          contentRef.current?.focus();
+        }}
+        className="w-full gap-0 overflow-y-auto outline-none sm:max-w-xl"
+      >
+        {/* Keyed so local drafts (title, description) reset when switching tasks. */}
+        {task && <TaskSheetBody key={task.id} task={task} {...props} />}
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+function TaskSheetBody({
+  task,
+  columns,
+  members,
+  labels,
+  comments,
+  currentUserId,
+  canModerate,
+  onUpdate,
+  onMove,
+  onDelete,
+}: Omit<TaskSheetProps, "task" | "onClose"> & { task: Task }) {
+  const assigneeId = task.assignee?.kind === "user" ? task.assignee.userId : "none";
+
+  return (
+    <>
+      <SheetHeader className="border-b pr-12">
+        <SheetDescription className="font-mono">{task.key}</SheetDescription>
+        <SheetTitle className="sr-only">{task.title}</SheetTitle>
+        <TitleField title={task.title} onSave={(title) => onUpdate({ title })} />
+      </SheetHeader>
+
+      <div className="space-y-8 p-4">
+        <dl className="grid grid-cols-[6rem_1fr] items-center gap-x-3 gap-y-2 text-sm">
+          <dt className="text-muted-foreground">Status</dt>
+          <dd>
+            <Select value={task.columnId} onValueChange={onMove}>
+              <SelectTrigger size="sm" aria-label="Status">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {columns.map((column) => (
+                  <SelectItem key={column.id} value={column.id}>
+                    {column.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </dd>
+
+          <dt className="text-muted-foreground">Priority</dt>
+          <dd>
+            <Select value={task.priority} onValueChange={(priority) => onUpdate({ priority: priority as Task["priority"] })}>
+              <SelectTrigger size="sm" aria-label="Priority">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {PRIORITIES.map((priority) => (
+                  <SelectItem key={priority} value={priority}>
+                    <PriorityIcon priority={priority} />
+                    {PRIORITY_META[priority].label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </dd>
+
+          <dt className="text-muted-foreground">Assignee</dt>
+          <dd>
+            <Select
+              value={assigneeId}
+              onValueChange={(value) =>
+                onUpdate({ assignee: value === "none" ? null : { kind: "user", userId: value } })
+              }
+            >
+              <SelectTrigger size="sm" aria-label="Assignee">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Unassigned</SelectItem>
+                {members.map((member) => (
+                  <SelectItem key={member.id} value={member.id}>
+                    <MemberAvatar member={member} className="size-5" />
+                    {member.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </dd>
+
+          <dt className="text-muted-foreground">Labels</dt>
+          <dd>
+            <LabelsPicker labels={labels} selected={task.labelIds} onChange={(labelIds) => onUpdate({ labelIds })} />
+          </dd>
+
+          <dt className="text-muted-foreground">Due date</dt>
+          <dd>
+            <Input
+              type="date"
+              aria-label="Due date"
+              className="h-8 w-44"
+              value={task.dueDate ?? ""}
+              onChange={(event) => onUpdate({ dueDate: event.target.value || null })}
+            />
+          </dd>
+        </dl>
+
+        <DescriptionField description={task.description} onSave={(description) => onUpdate({ description })} />
+
+        <CommentsSection
+          taskId={task.id}
+          comments={comments}
+          members={members}
+          currentUserId={currentUserId}
+          canModerate={canModerate}
+        />
+
+        <DeleteTaskButton taskKey={task.key} onConfirm={onDelete} />
+      </div>
+    </>
+  );
+}
+
+function TitleField({ title, onSave }: { title: string; onSave: (title: string) => void }) {
+  const [draft, setDraft] = useState(title);
+  return (
+    <Input
+      aria-label="Title"
+      className="-mx-2 h-auto border-transparent px-2 text-lg font-semibold shadow-none"
+      value={draft}
+      onChange={(event) => setDraft(event.target.value)}
+      onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()}
+      onBlur={() => {
+        const next = draft.trim();
+        if (!next) setDraft(title);
+        else if (next !== title) onSave(next);
+      }}
+    />
+  );
+}
+
+function LabelsPicker({
+  labels,
+  selected,
+  onChange,
+}: {
+  labels: Label[];
+  selected: string[];
+  onChange: (labelIds: string[]) => void;
+}) {
+  const chosen = labels.filter((label) => selected.includes(label.id));
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline" size="sm" aria-label="Labels" className="h-auto min-h-8 flex-wrap justify-start">
+          {chosen.length ? chosen.map((label) => <LabelChip key={label.id} label={label} />) : "Add labels"}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start">
+        {labels.map((label) => (
+          <DropdownMenuCheckboxItem
+            key={label.id}
+            checked={selected.includes(label.id)}
+            onSelect={(event) => event.preventDefault()}
+            onCheckedChange={(checked) =>
+              onChange(checked ? [...selected, label.id] : selected.filter((id) => id !== label.id))
+            }
+          >
+            <LabelDot color={label.color} />
+            {label.name}
+          </DropdownMenuCheckboxItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function DescriptionField({ description, onSave }: { description: string; onSave: (value: string) => void }) {
+  const [draft, setDraft] = useState(description);
+  const [tab, setTab] = useState(description ? "preview" : "write");
+  const dirty = draft !== description;
+
+  return (
+    <section className="space-y-2">
+      <Tabs value={tab} onValueChange={setTab}>
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-medium">Description</h3>
+          <TabsList>
+            <TabsTrigger value="write">Write</TabsTrigger>
+            <TabsTrigger value="preview">Preview</TabsTrigger>
+          </TabsList>
+        </div>
+        <TabsContent value="write">
+          <Textarea
+            aria-label="Description"
+            rows={6}
+            placeholder="Add details. Markdown supported."
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+          />
+        </TabsContent>
+        <TabsContent value="preview" className="min-h-10">
+          {draft ? <Markdown>{draft}</Markdown> : <p className="text-muted-foreground text-sm">No description.</p>}
+        </TabsContent>
+      </Tabs>
+      {dirty && (
+        <div className="flex gap-2">
+          <Button
+            size="sm"
+            onClick={() => {
+              onSave(draft);
+              setTab("preview");
+            }}
+          >
+            Save description
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setDraft(description)}>
+            Discard
+          </Button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function CommentsSection({
+  taskId,
+  comments,
+  members,
+  currentUserId,
+  canModerate,
+}: {
+  taskId: string;
+  comments: Comment[];
+  members: MemberOption[];
+  currentUserId: string;
+  canModerate: boolean;
+}) {
+  const [state, action, pending] = useFormAction(addCommentAction);
+  const memberName = (userId: string) => members.find((m) => m.id === userId)?.name ?? "Former member";
+
+  return (
+    <section className="space-y-3">
+      <h3 className="text-sm font-medium">Comments</h3>
+      {comments.length > 0 && (
+        <ul className="space-y-3">
+          {comments.map((comment) => {
+            const name = comment.author.kind === "user" ? memberName(comment.author.userId) : "AI teammate";
+            const isAuthor = comment.author.kind === "user" && comment.author.userId === currentUserId;
+            return (
+              <li key={comment.id} className="rounded-md border p-3">
+                <div className="flex items-center gap-2 text-xs">
+                  <MemberAvatar member={{ name }} className="size-5" />
+                  <span className="font-medium">{name}</span>
+                  <time dateTime={comment.createdAt} className="text-muted-foreground" suppressHydrationWarning>
+                    {new Date(comment.createdAt).toLocaleString()}
+                  </time>
+                  {(isAuthor || canModerate) && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="ml-auto size-6"
+                      aria-label="Delete comment"
+                      onClick={async () => {
+                        const result = await deleteCommentAction(comment.id);
+                        if (!result.ok) toast.error(result.error);
+                      }}
+                    >
+                      <Trash2 />
+                    </Button>
+                  )}
+                </div>
+                <Markdown>{comment.body}</Markdown>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      <form action={action} className="space-y-2">
+        <input type="hidden" name="taskId" value={taskId} />
+        <Textarea
+          name="body"
+          aria-label="Comment"
+          rows={3}
+          placeholder="Leave a comment. Markdown supported."
+          defaultValue={state.values?.body}
+        />
+        <FormError message={state.fieldErrors?.body?.[0]} />
+        <Button type="submit" size="sm" disabled={pending}>
+          Comment
+        </Button>
+      </form>
+    </section>
+  );
+}
+
+function DeleteTaskButton({ taskKey, onConfirm }: { taskKey: string; onConfirm: () => void }) {
+  return (
+    <AlertDialog>
+      <AlertDialogTrigger asChild>
+        <Button variant="ghost" size="sm" className="text-destructive">
+          <Trash2 />
+          Delete task
+        </Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete {taskKey}?</AlertDialogTitle>
+          <AlertDialogDescription>This also deletes its comments. It can&apos;t be undone.</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction variant="destructive" onClick={onConfirm}>
+            Delete
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+```
+
+- [ ] **Step 3: Header and the board itself**
+
+Create `src/components/board/board-header.tsx`:
+
+```tsx
+"use client";
+
+import { Ellipsis } from "lucide-react";
+import { startTransition, useState } from "react";
+import { FormError, TextField } from "@/components/forms/fields";
+import { useFormAction } from "@/components/forms/use-form-action";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Textarea } from "@/components/ui/textarea";
+import type { Board } from "@/lib/domain";
+import { deleteBoardAction, updateBoardAction } from "@/server/actions/boards";
+
+export function BoardHeader({
+  board,
+  workspaceName,
+  canManage,
+}: {
+  board: Board;
+  workspaceName: string;
+  canManage: boolean;
+}) {
+  const [dialog, setDialog] = useState<"edit" | "delete" | null>(null);
+
+  return (
+    <div className="flex items-start gap-2">
+      <div className="min-w-0">
+        <p className="text-muted-foreground text-sm">{workspaceName}</p>
+        <h1 className="text-xl font-semibold">{board.name}</h1>
+        {board.description && <p className="text-muted-foreground text-sm">{board.description}</p>}
+      </div>
+      {canManage && (
+        <>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" className="size-8" aria-label="Board actions">
+                <Ellipsis />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              <DropdownMenuItem onSelect={() => setDialog("edit")}>Edit board</DropdownMenuItem>
+              <DropdownMenuItem variant="destructive" onSelect={() => setDialog("delete")}>
+                Delete board
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          <Dialog open={dialog === "edit"} onOpenChange={(open) => setDialog(open ? "edit" : null)}>
+            <DialogContent>
+              {dialog === "edit" && <EditBoardForm board={board} onDone={() => setDialog(null)} />}
+            </DialogContent>
+          </Dialog>
+
+          <AlertDialog open={dialog === "delete"} onOpenChange={(open) => setDialog(open ? "delete" : null)}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Delete {board.name}?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  All of its columns, tasks and comments are deleted too. This can&apos;t be undone.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  variant="destructive"
+                  onClick={() => startTransition(() => deleteBoardAction(board.id))}
+                >
+                  Delete board
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </>
+      )}
+    </div>
+  );
+}
+
+function EditBoardForm({ board, onDone }: { board: Board; onDone: () => void }) {
+  const [state, action, pending] = useFormAction(updateBoardAction, onDone);
+  return (
+    <form action={action} className="space-y-6">
+      <DialogHeader>
+        <DialogTitle>Edit board</DialogTitle>
+      </DialogHeader>
+      <input type="hidden" name="boardId" value={board.id} />
+      <FieldGroup>
+        <TextField
+          name="name"
+          label="Board name"
+          required
+          defaultValue={state.values?.name ?? board.name}
+          errors={state.fieldErrors?.name}
+        />
+        <Field>
+          <FieldLabel htmlFor="description">Description</FieldLabel>
+          <Textarea
+            id="description"
+            name="description"
+            rows={3}
+            defaultValue={state.values?.description ?? board.description ?? ""}
+          />
+        </Field>
+      </FieldGroup>
+      <FormError message={state.fieldErrors?.description?.[0]} />
+      <DialogFooter>
+        <Button type="submit" disabled={pending}>
+          Save
+        </Button>
+      </DialogFooter>
+    </form>
+  );
+}
+```
+
+Create `src/components/board/board-view.tsx`:
+
+```tsx
+"use client";
+
+import {
+  DndContext,
+  DragOverlay,
+  KeyboardSensor,
+  PointerSensor,
+  closestCorners,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragOverEvent,
+  type DragStartEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  horizontalListSortingStrategy,
+  sortableKeyboardCoordinates,
+} from "@dnd-kit/sortable";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useMemo, useOptimistic, useState, useTransition } from "react";
+import { toast } from "sonner";
+import type { MemberOption } from "@/components/tasks/member-avatar";
+import {
+  filterTasks,
+  isFiltered,
+  parseBoardFilters,
+  positionAt,
+  serializeBoardFilters,
+  type Board,
+  type BoardFilters,
+  type Column,
+  type Comment,
+  type Label,
+  type Task,
+  type UpdateTaskInput,
+} from "@/lib/domain";
+import type { ActionResult } from "@/lib/forms";
+import { addColumnAction, deleteColumnAction, moveColumnAction, renameColumnAction } from "@/server/actions/boards";
+import {
+  deleteTaskAction,
+  moveTaskAction,
+  quickAddTaskAction,
+  updateTaskAction,
+} from "@/server/actions/tasks";
+import { AddColumn, BoardColumn } from "./board-column";
+import { BoardHeader } from "./board-header";
+import { columnReducer, groupTasks, planTaskMove, taskReducer } from "./board-state";
+import { BoardToolbar } from "./board-toolbar";
+import { CreateTaskDialog } from "./create-task-dialog";
+import { SortableTaskCard, TaskCardView } from "./task-card";
+import { TaskSheet } from "./task-sheet";
+
+export type BoardViewProps = {
+  board: Board;
+  workspaceName: string;
+  columns: Column[];
+  tasks: Task[];
+  members: MemberOption[];
+  labels: Label[];
+  comments: Comment[];
+  openTaskId: string | null;
+  currentUserId: string;
+  canManage: boolean;
+  canModerate: boolean;
+};
+
+function isTyping(target: EventTarget | null) {
+  return target instanceof HTMLElement && Boolean(target.closest("input, textarea, select, [contenteditable=true]"));
+}
+
+export function BoardView(props: BoardViewProps) {
+  const { board, members, labels, currentUserId, canManage } = props;
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
+  const [tasks, applyTask] = useOptimistic(props.tasks, taskReducer);
+  const [columns, applyColumn] = useOptimistic(props.columns, columnReducer);
+  const [createOpen, setCreateOpen] = useState(false);
+  // Pending while any board mutation is in flight; drives aria-busy and "Saving…".
+  const [saving, startSaving] = useTransition();
+  // During a drag: visible task ids per column, rearranged as the card moves.
+  const [dragItems, setDragItems] = useState<Record<string, string[]> | null>(null);
+  const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
+
+  const filters = useMemo(() => parseBoardFilters(new URLSearchParams(searchParams.toString())), [searchParams]);
+  const visible = useMemo(
+    () => groupTasks(columns, filterTasks(tasks, filters, currentUserId)),
+    [columns, tasks, filters, currentUserId],
+  );
+  const counts = useMemo(() => groupTasks(columns, tasks), [columns, tasks]);
+  const taskById = useMemo(() => new Map(tasks.map((task) => [task.id, task])), [tasks]);
+  const items =
+    dragItems ?? Object.fromEntries(Object.entries(visible).map(([id, list]) => [id, list.map((t) => t.id)]));
+
+  const navigate = useCallback(
+    (params: URLSearchParams) => {
+      const query = params.toString();
+      router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+    },
+    [pathname, router],
+  );
+  const replaceParams = (update: (params: URLSearchParams) => void) => {
+    const params = new URLSearchParams(searchParams.toString());
+    update(params);
+    navigate(params);
+  };
+  // Filters live in the URL so a filtered board can be shared or reloaded.
+  const setFilters = useCallback(
+    (next: BoardFilters) => navigate(serializeBoardFilters(next, new URLSearchParams(searchParams.toString()))),
+    [navigate, searchParams],
+  );
+  const taskHref = (key: string) => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("task", key);
+    return `${pathname}?${params}`;
+  };
+
+  /** Applies an optimistic update, runs the action, and toasts on failure (the UI then reverts). */
+  function mutate(optimistic: () => void, action: () => Promise<ActionResult>) {
+    startSaving(async () => {
+      optimistic();
+      const result = await action();
+      if (!result.ok) toast.error(result.error);
+    });
+  }
+
+  // "C" opens the create dialog unless the user is typing or another dialog is open.
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key.toLowerCase() !== "c" || event.metaKey || event.ctrlKey || event.altKey) return;
+      if (isTyping(event.target) || document.querySelector("[role=dialog], [role=alertdialog]")) return;
+      event.preventDefault();
+      setCreateOpen(true);
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  // ---- drag & drop -------------------------------------------------------
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  const containerOf = (id: string, source: Record<string, string[]>) =>
+    id in source ? id : Object.keys(source).find((columnId) => source[columnId].includes(id));
+
+  function onDragStart({ active }: DragStartEvent) {
+    if (active.data.current?.type !== "task") return;
+    setActiveTaskId(String(active.id));
+    setDragItems(items);
+  }
+
+  function onDragOver({ active, over }: DragOverEvent) {
+    if (!over || active.data.current?.type !== "task") return;
+    setDragItems((current) => {
+      if (!current) return current;
+      const from = containerOf(String(active.id), current);
+      const to = containerOf(String(over.id), current);
+      if (!from || !to || from === to) return current;
+      const target = current[to].filter((id) => id !== active.id);
+      const overIndex = target.indexOf(String(over.id));
+      target.splice(overIndex === -1 ? target.length : overIndex, 0, String(active.id));
+      return { ...current, [from]: current[from].filter((id) => id !== active.id), [to]: target };
+    });
+  }
+
+  function onDragEnd({ active, over }: DragEndEvent) {
+    const activeId = String(active.id);
+    const current = dragItems;
+    setDragItems(null);
+    setActiveTaskId(null);
+    if (!over) return;
+
+    if (active.data.current?.type === "column") {
+      const ids = columns.map((column) => column.id);
+      const overColumn = containerOf(String(over.id), items) ?? String(over.id);
+      const from = ids.indexOf(activeId);
+      const to = ids.indexOf(overColumn);
+      if (from === -1 || to === -1 || from === to) return;
+      const others = columns.filter((column) => column.id !== activeId).map((column) => column.position);
+      mutate(
+        () => applyColumn({ type: "move", id: activeId, position: positionAt(others, to) }),
+        () => moveColumnAction(activeId, to),
+      );
+      return;
+    }
+
+    if (!current) return;
+    const columnId = containerOf(activeId, current);
+    if (!columnId) return;
+    let ids = current[columnId];
+    const overIndex = ids.indexOf(String(over.id));
+    if (overIndex !== -1) ids = arrayMove(ids, ids.indexOf(activeId), overIndex);
+
+    const plan = planTaskMove(tasks, activeId, columnId, ids);
+    if (!plan) return;
+    mutate(
+      () => applyTask({ type: "move", id: activeId, columnId, position: plan.position }),
+      () => moveTaskAction(activeId, columnId, plan.index),
+    );
+  }
+
+  // ---- task & column mutations --------------------------------------------
+
+  function quickAdd(columnId: string, title: string) {
+    const first = counts[columnId]?.[0];
+    const now = new Date().toISOString();
+    const draft: Task = {
+      id: `draft-${crypto.randomUUID()}`,
+      boardId: board.id,
+      columnId,
+      number: 0,
+      key: "…",
+      title,
+      description: "",
+      priority: "none",
+      assignee: null,
+      labelIds: [],
+      dueDate: null,
+      position: positionAt(first ? [first.position] : [], 0),
+      parentId: null,
+      createdBy: currentUserId,
+      createdAt: now,
+      updatedAt: now,
+    };
+    mutate(() => applyTask({ type: "add", task: draft }), () => quickAddTaskAction(columnId, title));
+  }
+
+  function addColumn(name: string) {
+    const last = columns.at(-1);
+    const column = { id: `draft-${crypto.randomUUID()}`, boardId: board.id, name, position: positionAt(last ? [last.position] : [], 1) };
+    mutate(() => applyColumn({ type: "add", column }), () => addColumnAction(board.id, name));
+  }
+
+  const openTask = props.openTaskId ? taskById.get(props.openTaskId) : undefined;
+  const closeTask = () => replaceParams((params) => params.delete("task"));
+
+  function updateTask(patch: UpdateTaskInput) {
+    if (!openTask) return;
+    const id = openTask.id;
+    mutate(() => applyTask({ type: "update", id, patch }), () => updateTaskAction(id, patch));
+  }
+
+  function moveTaskToColumn(columnId: string) {
+    if (!openTask || columnId === openTask.columnId) return;
+    const id = openTask.id;
+    const others = (counts[columnId] ?? []).map((task) => task.position);
+    mutate(
+      () => applyTask({ type: "move", id, columnId, position: positionAt(others, others.length) }),
+      () => moveTaskAction(id, columnId, others.length),
+    );
+  }
+
+  function deleteTask() {
+    if (!openTask) return;
+    const { id, key } = openTask;
+    closeTask();
+    mutate(
+      () => applyTask({ type: "delete", id }),
+      async () => {
+        const result = await deleteTaskAction(id);
+        if (result.ok) toast.success(`Deleted ${key}`);
+        return result;
+      },
+    );
+  }
+
+  const memberById = new Map(members.map((member) => [member.id, member]));
+  const cardProps = (task: Task) => ({
+    task,
+    href: taskHref(task.key),
+    labels: labels.filter((label) => task.labelIds.includes(label.id)),
+    assignee: task.assignee?.kind === "user" ? memberById.get(task.assignee.userId) : undefined,
+  });
+  const activeTask = activeTaskId ? taskById.get(activeTaskId) : undefined;
+  const defaultColumnId = (columns.find((column) => column.name === "Todo") ?? columns[0])?.id ?? "";
+
+  return (
+    <div data-slot="board" aria-busy={saving} className="flex min-h-0 flex-1 flex-col gap-4">
+      <BoardHeader board={board} workspaceName={props.workspaceName} canManage={canManage} />
+      <BoardToolbar
+        filters={filters}
+        onChange={setFilters}
+        members={members}
+        labels={labels}
+        onNewTask={() => setCreateOpen(true)}
+        saving={saving}
+      />
+
+      <DndContext
+        id="board-dnd"
+        sensors={sensors}
+        collisionDetection={closestCorners}
+        onDragStart={onDragStart}
+        onDragOver={onDragOver}
+        onDragEnd={onDragEnd}
+        onDragCancel={() => {
+          setDragItems(null);
+          setActiveTaskId(null);
+        }}
+      >
+        <SortableContext items={columns.map((column) => column.id)} strategy={horizontalListSortingStrategy}>
+          <div className="flex min-h-0 flex-1 items-start gap-3 overflow-x-auto pb-2">
+            {columns.map((column) => (
+              <BoardColumn
+                key={column.id}
+                column={column}
+                taskIds={items[column.id] ?? []}
+                taskCount={counts[column.id]?.length ?? 0}
+                filtered={isFiltered(filters)}
+                canManage={canManage}
+                renderTask={(taskId) => {
+                  const task = taskById.get(taskId);
+                  return task ? <SortableTaskCard key={task.id} {...cardProps(task)} /> : null;
+                }}
+                onQuickAdd={(title) => quickAdd(column.id, title)}
+                onRename={(name) =>
+                  mutate(
+                    () => applyColumn({ type: "rename", id: column.id, name }),
+                    () => renameColumnAction(column.id, name),
+                  )
+                }
+                onDelete={() =>
+                  mutate(() => applyColumn({ type: "delete", id: column.id }), () => deleteColumnAction(column.id))
+                }
+              />
+            ))}
+            {canManage && <AddColumn onAdd={addColumn} />}
+          </div>
+        </SortableContext>
+        <DragOverlay>
+          {activeTask ? <TaskCardView {...cardProps(activeTask)} className="rotate-2 shadow-lg" /> : null}
+        </DragOverlay>
+      </DndContext>
+
+      <CreateTaskDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        boardId={board.id}
+        columns={columns}
+        members={members}
+        defaultColumnId={defaultColumnId}
+      />
+      <TaskSheet
+        task={openTask}
+        columns={columns}
+        members={members}
+        labels={labels}
+        comments={props.comments}
+        currentUserId={currentUserId}
+        canModerate={props.canModerate}
+        onClose={closeTask}
+        onUpdate={updateTask}
+        onMove={moveTaskToColumn}
+        onDelete={deleteTask}
+      />
+    </div>
+  );
+}
+```
+
+- [ ] **Step 4: Board page**
+
+Replace `src/app/[team]/board/[boardId]/page.tsx`:
+
+```tsx
+import type { Metadata } from "next";
+import { notFound } from "next/navigation";
+import { BoardView } from "@/components/board/board-view";
+import { requireTeamMember } from "@/server/auth/guards";
+import { can } from "@/server/auth/permissions";
+import { getRepositories } from "@/server/data";
+
+export const metadata: Metadata = { title: "Board" };
+
+export default async function BoardPage({ params, searchParams }: PageProps<"/[team]/board/[boardId]">) {
+  const [{ team: teamSlug, boardId }, { task: taskKey }] = await Promise.all([params, searchParams]);
+  const { user, team, membership } = await requireTeamMember(teamSlug);
+  const repos = getRepositories();
+  const board = await repos.boards.get(boardId);
+  const workspace = board ? await repos.workspaces.get(board.workspaceId) : null;
+  if (!board || !workspace || workspace.teamId !== team.id) notFound();
+
+  const [columns, tasks, members, labels] = await Promise.all([
+    repos.boards.listColumns(board.id),
+    repos.tasks.listForBoard(board.id),
+    repos.memberships.listMembers(team.id),
+    repos.labels.listForTeam(team.id),
+  ]);
+  // ?task=ENG-12 opens the task sheet (PRD §5.3).
+  const openTask =
+    typeof taskKey === "string" ? (tasks.find((task) => task.key === taskKey.toUpperCase()) ?? null) : null;
+  const comments = openTask ? await repos.comments.listForTask(openTask.id) : [];
+
+  return (
+    <BoardView
+      board={board}
+      workspaceName={workspace.name}
+      columns={columns}
+      tasks={tasks}
+      members={members.map(({ user: member }) => ({ id: member.id, name: member.name, email: member.email }))}
+      labels={labels}
+      comments={comments}
+      openTaskId={openTask?.id ?? null}
+      currentUserId={user.id}
+      canManage={can(membership.role, "column:manage")}
+      canModerate={can(membership.role, "comment:moderate")}
+    />
+  );
+}
+```
+
+- [ ] **Step 5: Verify**
+
+Run: `rm -rf .next && pnpm test && pnpm lint && pnpm typecheck && pnpm build && pnpm test:e2e`
+Expected: 154 unit tests; build clean; the 12 M1 e2e tests still pass. Manual: `pnpm dev`, sign in as the demo user, open the Engineering board, drag ENG-2 to Todo, press `C`, open a card and edit it.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add -A
+git commit -m "feat(board): add drag-and-drop Kanban, quick-add, task dialog, task sheet and filters"
+```
+
+---
+
+### Task 7: Sidebar management + My tasks
+
+**Files:**
+- Create: `src/components/shell/workspace-actions.tsx`, `src/components/shell/board-link.tsx`
+- Modify: `src/components/onboarding/create-workspace-form.tsx`, `src/app/onboarding/[team]/workspace/page.tsx`, `src/components/shell/app-sidebar.tsx`, `src/app/[team]/layout.tsx`, `src/app/[team]/page.tsx`
+
+**Interfaces:**
+- Produces: `<NewWorkspaceButton teamSlug>` (sidebar group action **New workspace** → dialog **New workspace**, button **Create workspace**); `<WorkspaceMenu workspace>` (button **Workspace actions for {name}** → **New board** (dialog, button **Create board**), **Rename workspace** (button **Save**), **Delete workspace** (alertdialog)); `<BoardLink>` highlights the current board; `CreateWorkspaceForm` now takes `action` and `submitLabel` props; `AppSidebar` takes `canManage`. **My tasks** lists the caller's tasks with priority, key, labels, board and status, each linking to `…/board/[id]?task=KEY`.
+
+- [ ] **Step 1: Reusable workspace form**
+
+Replace `src/components/onboarding/create-workspace-form.tsx`:
+
+```tsx
+"use client";
+
+import { useActionState, useState } from "react";
+import { TextField } from "@/components/forms/fields";
+import { Button } from "@/components/ui/button";
+import { FieldGroup } from "@/components/ui/field";
+import { suggestKeyPrefix } from "@/lib/domain";
+import { initialFormState, type FormState } from "@/lib/forms";
+
+/** Used by onboarding (→ invite step) and the sidebar (→ new board); each passes its own action. */
+export function CreateWorkspaceForm({
+  teamSlug,
+  action: workspaceAction,
+  submitLabel = "Continue",
+}: {
+  teamSlug: string;
+  action: (prev: FormState, formData: FormData) => Promise<FormState>;
+  submitLabel?: string;
+}) {
+  const [state, action, pending] = useActionState(workspaceAction, initialFormState);
+  const [name, setName] = useState("");
+  const [keyPrefix, setKeyPrefix] = useState("");
+  const [prefixTouched, setPrefixTouched] = useState(false);
+
+  return (
+    <form action={action} className="space-y-6">
+      <input type="hidden" name="teamSlug" value={teamSlug} />
+      <FieldGroup>
+        <TextField
+          name="name"
+          label="Workspace name"
+          placeholder="Engineering"
+          required
+          autoFocus
+          value={name}
+          onChange={(event) => {
+            setName(event.target.value);
+            if (!prefixTouched) setKeyPrefix(suggestKeyPrefix(event.target.value));
+          }}
+          errors={state.fieldErrors?.name}
+        />
+        <TextField
+          name="keyPrefix"
+          label="Key prefix"
+          required
+          maxLength={5}
+          value={keyPrefix}
+          onChange={(event) => {
+            setKeyPrefix(event.target.value.toUpperCase());
+            setPrefixTouched(true);
+          }}
+          description={`Task IDs will look like ${keyPrefix || "ENG"}-1`}
+          errors={state.fieldErrors?.keyPrefix}
+        />
+      </FieldGroup>
+      <Button type="submit" className="w-full" disabled={pending}>
+        {submitLabel}
+      </Button>
+    </form>
+  );
+}
+```
+
+Replace `src/app/onboarding/[team]/workspace/page.tsx`:
+
+```tsx
+import type { Metadata } from "next";
+import { CreateWorkspaceForm } from "@/components/onboarding/create-workspace-form";
+import { OnboardingStep } from "@/components/onboarding/onboarding-step";
+import { createWorkspaceAction } from "@/server/actions/onboarding";
+import { requireTeamMember } from "@/server/auth/guards";
+
+export const metadata: Metadata = { title: "Create a workspace" };
+
+export default async function CreateWorkspacePage({ params }: PageProps<"/onboarding/[team]/workspace">) {
+  const { team } = await requireTeamMember((await params).team);
+
+  return (
+    <OnboardingStep
+      step={2}
+      title="Create your first workspace"
+      description="Workspaces group boards, like Engineering or Marketing. The key prefix starts every task ID."
+    >
+      <CreateWorkspaceForm teamSlug={team.slug} action={createWorkspaceAction} />
+    </OnboardingStep>
+  );
+}
+```
+
+- [ ] **Step 2: Sidebar actions**
+
+Create `src/components/shell/workspace-actions.tsx`:
+
+```tsx
+"use client";
+
+import { Ellipsis, Plus } from "lucide-react";
+import { startTransition, useState } from "react";
+import { TextField } from "@/components/forms/fields";
+import { useFormAction } from "@/components/forms/use-form-action";
+import { CreateWorkspaceForm } from "@/components/onboarding/create-workspace-form";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { FieldGroup } from "@/components/ui/field";
+import { SidebarGroupAction, SidebarMenuAction } from "@/components/ui/sidebar";
+import type { Workspace } from "@/lib/domain";
+import { createBoardAction } from "@/server/actions/boards";
+import { createWorkspaceAction, deleteWorkspaceAction, renameWorkspaceAction } from "@/server/actions/workspaces";
+
+export function NewWorkspaceButton({ teamSlug }: { teamSlug: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <SidebarGroupAction title="New workspace" aria-label="New workspace" onClick={() => setOpen(true)}>
+        <Plus />
+      </SidebarGroupAction>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>New workspace</DialogTitle>
+            <DialogDescription>It starts with a default board.</DialogDescription>
+          </DialogHeader>
+          {open && (
+            <CreateWorkspaceForm teamSlug={teamSlug} action={createWorkspaceAction} submitLabel="Create workspace" />
+          )}
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+export function WorkspaceMenu({ workspace }: { workspace: Pick<Workspace, "id" | "name"> }) {
+  const [dialog, setDialog] = useState<"board" | "rename" | "delete" | null>(null);
+  const close = () => setDialog(null);
+
+  return (
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <SidebarMenuAction aria-label={`Workspace actions for ${workspace.name}`}>
+            <Ellipsis />
+          </SidebarMenuAction>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent side="right" align="start">
+          <DropdownMenuItem onSelect={() => setDialog("board")}>New board</DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => setDialog("rename")}>Rename workspace</DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem variant="destructive" onSelect={() => setDialog("delete")}>
+            Delete workspace
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      <Dialog open={dialog === "board" || dialog === "rename"} onOpenChange={(open) => !open && close()}>
+        <DialogContent>
+          {dialog === "board" && <NewBoardForm workspaceId={workspace.id} />}
+          {dialog === "rename" && <RenameWorkspaceForm workspace={workspace} onDone={close} />}
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={dialog === "delete"} onOpenChange={(open) => !open && close()}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {workspace.name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Every board, task and comment in this workspace is deleted too. This can&apos;t be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => startTransition(() => deleteWorkspaceAction(workspace.id))}
+            >
+              Delete workspace
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
+}
+
+function NewBoardForm({ workspaceId }: { workspaceId: string }) {
+  const [state, action, pending] = useFormAction(createBoardAction);
+  return (
+    <form action={action} className="space-y-6">
+      <DialogHeader>
+        <DialogTitle>New board</DialogTitle>
+        <DialogDescription>Starts with Backlog, Todo, In Progress, In Review and Done.</DialogDescription>
+      </DialogHeader>
+      <input type="hidden" name="workspaceId" value={workspaceId} />
+      <FieldGroup>
+        <TextField
+          name="name"
+          label="Board name"
+          required
+          autoFocus
+          defaultValue={state.values?.name}
+          errors={state.fieldErrors?.name}
+        />
+      </FieldGroup>
+      <DialogFooter>
+        <Button type="submit" disabled={pending}>
+          Create board
+        </Button>
+      </DialogFooter>
+    </form>
+  );
+}
+
+function RenameWorkspaceForm({ workspace, onDone }: { workspace: Pick<Workspace, "id" | "name">; onDone: () => void }) {
+  const [state, action, pending] = useFormAction(renameWorkspaceAction, onDone);
+  return (
+    <form action={action} className="space-y-6">
+      <DialogHeader>
+        <DialogTitle>Rename workspace</DialogTitle>
+        <DialogDescription>Task keys keep their prefix.</DialogDescription>
+      </DialogHeader>
+      <input type="hidden" name="workspaceId" value={workspace.id} />
+      <FieldGroup>
+        <TextField
+          name="name"
+          label="Workspace name"
+          required
+          autoFocus
+          defaultValue={state.values?.name ?? workspace.name}
+          errors={state.fieldErrors?.name}
+        />
+      </FieldGroup>
+      <DialogFooter>
+        <Button type="submit" disabled={pending}>
+          Save
+        </Button>
+      </DialogFooter>
+    </form>
+  );
+}
+```
+
+Create `src/components/shell/board-link.tsx`:
+
+```tsx
+"use client";
+
+import { SquareKanban } from "lucide-react";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { SidebarMenuSubButton } from "@/components/ui/sidebar";
+
+export function BoardLink({ href, name }: { href: string; name: string }) {
+  const pathname = usePathname();
+  return (
+    <SidebarMenuSubButton asChild isActive={pathname === href}>
+      <Link href={href}>
+        <SquareKanban />
+        <span>{name}</span>
+      </Link>
+    </SidebarMenuSubButton>
+  );
+}
+```
+
+Replace `src/components/shell/app-sidebar.tsx`:
+
+```tsx
+import { Layers, LogOut } from "lucide-react";
+import Link from "next/link";
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubItem,
+  SidebarRail,
+} from "@/components/ui/sidebar";
+import type { Board, Team, User, Workspace } from "@/lib/domain";
+import { boardPath } from "@/lib/paths";
+import { signOutAction } from "@/server/actions/auth";
+import { BoardLink } from "./board-link";
+import { navItems } from "./nav-items";
+import { TeamSwitcher } from "./team-switcher";
+import { NewWorkspaceButton, WorkspaceMenu } from "./workspace-actions";
+
+export type SidebarWorkspace = Workspace & { boards: Board[] };
+
+export function AppSidebar({
+  user,
+  team,
+  teams,
+  workspaces,
+  canManage,
+}: {
+  user: User;
+  team: Team;
+  teams: Team[];
+  workspaces: SidebarWorkspace[];
+  /** Owners and admins can create, rename and delete workspaces and boards. */
+  canManage: boolean;
+}) {
+  return (
+    <Sidebar collapsible="icon">
+      <SidebarHeader>
+        <TeamSwitcher current={team} teams={teams} />
+      </SidebarHeader>
+      <SidebarContent>
+        <SidebarGroup>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {navItems(team.slug).map((item) => (
+                <SidebarMenuItem key={item.href}>
+                  <SidebarMenuButton asChild tooltip={item.title}>
+                    <Link href={item.href}>
+                      <item.icon />
+                      <span>{item.title}</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              ))}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+        <SidebarGroup>
+          <SidebarGroupLabel>Workspaces</SidebarGroupLabel>
+          {canManage && <NewWorkspaceButton teamSlug={team.slug} />}
+          <SidebarGroupContent>
+            {workspaces.length === 0 ? (
+              <p className="text-muted-foreground px-2 text-xs group-data-[collapsible=icon]:hidden">
+                No workspaces yet
+              </p>
+            ) : (
+              <SidebarMenu>
+                {workspaces.map((workspace) => (
+                  <SidebarMenuItem key={workspace.id}>
+                    <SidebarMenuButton asChild tooltip={workspace.name}>
+                      <span>
+                        <Layers />
+                        <span>{workspace.name}</span>
+                      </span>
+                    </SidebarMenuButton>
+                    {canManage && <WorkspaceMenu workspace={workspace} />}
+                    <SidebarMenuSub>
+                      {workspace.boards.map((board) => (
+                        <SidebarMenuSubItem key={board.id}>
+                          <BoardLink href={boardPath(team.slug, board.id)} name={board.name} />
+                        </SidebarMenuSubItem>
+                      ))}
+                    </SidebarMenuSub>
+                  </SidebarMenuItem>
+                ))}
+              </SidebarMenu>
+            )}
+          </SidebarGroupContent>
+        </SidebarGroup>
+      </SidebarContent>
+      <SidebarFooter>
+        <div className="min-w-0 px-2 text-sm group-data-[collapsible=icon]:hidden">
+          <p className="truncate font-medium">{user.name}</p>
+          <p className="text-muted-foreground truncate text-xs">{user.email}</p>
+        </div>
+        <form action={signOutAction}>
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton type="submit" tooltip="Sign out">
+                <LogOut />
+                <span>Sign out</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </form>
+      </SidebarFooter>
+      <SidebarRail />
+    </Sidebar>
+  );
+}
+```
+
+Replace `src/app/[team]/layout.tsx`:
+
+```tsx
+import { AppHeader } from "@/components/shell/app-header";
+import { AppSidebar } from "@/components/shell/app-sidebar";
+import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+import { requireTeamMember } from "@/server/auth/guards";
+import { can } from "@/server/auth/permissions";
+import { getRepositories } from "@/server/data";
+
+export default async function TeamLayout({ children, params }: LayoutProps<"/[team]">) {
+  const { user, team, membership } = await requireTeamMember((await params).team);
+  const repos = getRepositories();
+  const [teams, workspaces] = await Promise.all([
+    repos.teams.listForUser(user.id),
+    repos.workspaces.listForTeam(team.id),
+  ]);
+  const tree = await Promise.all(
+    workspaces.map(async (workspace) => ({
+      ...workspace,
+      boards: await repos.boards.listForWorkspace(workspace.id),
+    })),
+  );
+  const boards = tree.flatMap((workspace) => workspace.boards.map(({ id, name }) => ({ id, name })));
+
+  return (
+    <SidebarProvider>
+      <AppSidebar
+        user={user}
+        team={team}
+        teams={teams}
+        workspaces={tree}
+        canManage={can(membership.role, "workspace:create")}
+      />
+      {/* min-w-0 keeps wide content (the board) from pushing the header off-screen. */}
+      <SidebarInset className="min-w-0">
+        <AppHeader teamSlug={team.slug} boards={boards} />
+        <div className="flex min-h-0 flex-1 flex-col p-6">{children}</div>
+      </SidebarInset>
+    </SidebarProvider>
+  );
+}
+```
+
+- [ ] **Step 3: My tasks**
+
+Replace `src/app/[team]/page.tsx`:
+
+```tsx
+import type { Metadata } from "next";
+import Link from "next/link";
+import { LabelChip } from "@/components/tasks/label-chip";
+import { PriorityIcon } from "@/components/tasks/priority";
+import { boardPath } from "@/lib/paths";
+import { requireTeamMember } from "@/server/auth/guards";
+import { getRepositories } from "@/server/data";
+
+export const metadata: Metadata = { title: "My tasks" };
+
+export default async function MyTasksPage({ params }: PageProps<"/[team]">) {
+  const { user, team } = await requireTeamMember((await params).team);
+  const repos = getRepositories();
+  const [tasks, labels, workspaces] = await Promise.all([
+    repos.tasks.listAssignedTo(team.id, user.id),
+    repos.labels.listForTeam(team.id),
+    repos.workspaces.listForTeam(team.id),
+  ]);
+  const boards = (await Promise.all(workspaces.map((w) => repos.boards.listForWorkspace(w.id)))).flat();
+  const columns = (await Promise.all(boards.map((b) => repos.boards.listColumns(b.id)))).flat();
+  const boardName = new Map(boards.map((b) => [b.id, b.name]));
+  const columnName = new Map(columns.map((c) => [c.id, c.name]));
+
+  return (
+    <div className="mx-auto w-full max-w-3xl space-y-4">
+      <h1 className="text-2xl font-semibold">My tasks</h1>
+      {tasks.length === 0 ? (
+        <p className="text-muted-foreground text-sm">
+          Nothing assigned to you yet. Assign yourself a task from any board.
+        </p>
+      ) : (
+        <ul className="divide-y rounded-lg border">
+          {tasks.map((task) => (
+            <li key={task.id}>
+              <Link
+                href={`${boardPath(team.slug, task.boardId)}?task=${task.key}`}
+                className="hover:bg-muted/50 flex items-center gap-3 px-4 py-3 text-sm"
+              >
+                <PriorityIcon priority={task.priority} />
+                <span className="text-muted-foreground w-16 shrink-0 font-mono text-xs">{task.key}</span>
+                <span className="min-w-0 flex-1 truncate font-medium">{task.title}</span>
+                {labels
+                  .filter((label) => task.labelIds.includes(label.id))
+                  .map((label) => (
+                    <LabelChip key={label.id} label={label} />
+                  ))}
+                <span className="text-muted-foreground hidden text-xs sm:inline">
+                  {boardName.get(task.boardId)} · {columnName.get(task.columnId)}
+                </span>
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+```
+
+- [ ] **Step 4: Verify**
+
+Run: `rm -rf .next && pnpm test && pnpm lint && pnpm typecheck && pnpm build && pnpm test:e2e`
+Expected: 154 unit tests; build clean; 12 e2e tests pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add -A
+git commit -m "feat(shell): manage workspaces and boards from the sidebar; list my tasks"
+```
+
+---
+
+### Task 8: E2E coverage, docs, PR
+
+**Files:**
+- Create: `e2e/board.spec.ts`
+- Modify: `e2e/helpers.ts`, `README.md`, `docs/build-plan.md` (status table)
+
+**Interfaces:**
+- Produces: helpers `openFreshBoard(page)` (new user + team + empty ENG board, so mutating tests never share data), `column(page, name)`, `quickAdd(page, column, title)`, `drag(page, from, to, offsetY?)` (real pointer events past dnd-kit's 5px threshold), `saved(page)` (gotcha 2); 8 new e2e tests.
+
+- [ ] **Step 1: Helpers and specs**
+
+Replace `e2e/helpers.ts`:
+
+```ts
+import { expect, type Locator, type Page } from "@playwright/test";
+
+// Mirrors DEMO_USER in src/server/data/mock/seed.ts.
+export const DEMO = { email: "demo@trackaai.test", password: "demo-password" };
+
+export function uniqueId() {
+  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+}
+
+export async function fillSignIn(page: Page, email: string, password: string) {
+  await page.getByLabel("Email", { exact: true }).fill(email);
+  await page.getByLabel("Password", { exact: true }).fill(password);
+  await page.getByRole("button", { name: "Sign in" }).click();
+}
+
+export async function signInAsDemo(page: Page) {
+  await page.goto("/sign-in");
+  await fillSignIn(page, DEMO.email, DEMO.password);
+  await expect(page.getByRole("heading", { name: "My tasks" })).toBeVisible();
+}
+
+/** Signs up a fresh user and waits for onboarding step 1. Returns the unique id used. */
+export async function signUp(page: Page) {
+  const id = uniqueId();
+  await page.goto("/sign-up");
+  await page.getByLabel("Name", { exact: true }).fill(`User ${id}`);
+  await page.getByLabel("Email", { exact: true }).fill(`user-${id}@example.test`);
+  await page.getByLabel("Password", { exact: true }).fill("password123");
+  await page.getByRole("button", { name: "Create account" }).click();
+  await expect(page.getByRole("heading", { name: "Create your team" })).toBeVisible();
+  return id;
+}
+
+/** From onboarding step 1, creates a team and an "Engineering" workspace; stops at the invite step. */
+export async function createTeamAndWorkspace(page: Page, teamName: string) {
+  await page.getByLabel("Team name", { exact: true }).fill(teamName);
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page.getByRole("heading", { name: "Create your first workspace" })).toBeVisible();
+  await page.getByLabel("Workspace name", { exact: true }).fill("Engineering");
+  await expect(page.getByLabel("Key prefix", { exact: true })).toHaveValue("ENG");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page.getByRole("heading", { name: "Invite your teammates" })).toBeVisible();
+}
+
+/** Signs up a fresh user with their own team and lands on its empty "Engineering" board (keys ENG-n). */
+export async function openFreshBoard(page: Page) {
+  const id = await signUp(page);
+  await createTeamAndWorkspace(page, `Team ${id}`);
+  await page.getByRole("link", { name: "Skip for now" }).click();
+  await expect(page.getByRole("region", { name: "Backlog" })).toBeVisible();
+  return id;
+}
+
+export const column = (page: Page, name: string) => page.getByRole("region", { name, exact: true });
+
+/** Adds a task at the top of a column and waits until the server has assigned its key. */
+export async function quickAdd(page: Page, columnName: string, title: string) {
+  await page.getByRole("button", { name: `Add task to ${columnName}` }).click();
+  const input = page.getByLabel(`New task in ${columnName}`);
+  await input.fill(title);
+  await input.press("Enter");
+  await input.press("Escape");
+  await expect(column(page, columnName).getByRole("article").filter({ hasText: title })).toContainText(/ENG-\d+/);
+}
+
+/** Drags with real pointer events (dnd-kit needs movement past its 5px activation distance). */
+export async function drag(page: Page, from: Locator, to: Locator, offsetY = 60) {
+  const source = (await from.boundingBox())!;
+  const target = (await to.boundingBox())!;
+  await page.mouse.move(source.x + source.width / 2, source.y + source.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(source.x + source.width / 2 + 10, source.y + source.height / 2, { steps: 5 });
+  await page.mouse.move(target.x + target.width / 2, target.y + offsetY, { steps: 20 });
+  await page.mouse.up();
+}
+
+/** Waits until the board has no mutation in flight (it sets aria-busy while saving). */
+export async function saved(page: Page) {
+  await expect(page.locator('[data-slot="board"]')).toHaveAttribute("aria-busy", "false");
+}
+```
+
+Create `e2e/board.spec.ts`:
+
+```ts
+import { expect, test } from "@playwright/test";
+import { column, drag, openFreshBoard, quickAdd, saved, signInAsDemo } from "./helpers";
+
+test("C opens the create dialog and the task is edited in its sheet", async ({ page }) => {
+  await openFreshBoard(page);
+  await page.keyboard.press("c");
+  const dialog = page.getByRole("dialog", { name: "New task" });
+  await dialog.getByLabel("Title", { exact: true }).fill("Write the spec");
+  await dialog.getByRole("button", { name: "Create task" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(column(page, "Todo")).toContainText("ENG-1");
+
+  await page.getByRole("link", { name: "Write the spec" }).click();
+  await expect(page).toHaveURL(/\?task=ENG-1$/);
+  const sheet = page.getByRole("dialog", { name: "Write the spec" });
+
+  await sheet.getByRole("combobox", { name: "Priority" }).click();
+  await page.getByRole("option", { name: "High" }).click();
+  await sheet.getByRole("button", { name: "Labels" }).click();
+  await page.getByRole("menuitemcheckbox", { name: "Bug" }).click();
+  await page.keyboard.press("Escape");
+
+  await sheet.getByRole("tab", { name: "Write" }).click();
+  await sheet.getByLabel("Description").fill("Needs **tests**.");
+  await sheet.getByRole("button", { name: "Save description" }).click();
+  await expect(sheet.locator("strong", { hasText: "tests" })).toBeVisible();
+
+  await sheet.getByLabel("Comment").fill("Looks *good*");
+  await sheet.getByRole("button", { name: "Comment", exact: true }).click();
+  await expect(sheet.locator("em", { hasText: "good" })).toBeVisible();
+
+  await saved(page);
+  await page.reload();
+  const reopened = page.getByRole("dialog", { name: "Write the spec" });
+  await expect(reopened.getByRole("combobox", { name: "Priority" })).toHaveText(/High/);
+  await expect(reopened.locator("em", { hasText: "good" })).toBeVisible();
+
+  await page.keyboard.press("Escape");
+  await expect(page).not.toHaveURL(/task=/);
+  await expect(column(page, "Todo").getByRole("article")).toContainText("Bug");
+});
+
+test("dragging a card to another column persists", async ({ page }) => {
+  await openFreshBoard(page);
+  await quickAdd(page, "Backlog", "Drag me");
+  await drag(page, column(page, "Backlog").getByRole("article").filter({ hasText: "Drag me" }), column(page, "In Progress"));
+  await expect(column(page, "In Progress")).toContainText("Drag me");
+  await saved(page);
+  await page.reload();
+  await expect(column(page, "In Progress")).toContainText("Drag me");
+  await expect(column(page, "Backlog")).toContainText("No tasks");
+});
+
+test("dragging reorders cards within a column", async ({ page }) => {
+  await openFreshBoard(page);
+  await quickAdd(page, "Todo", "Bottom");
+  await quickAdd(page, "Todo", "Top"); // quick-add inserts at the top
+  const titles = () => column(page, "Todo").getByRole("link").allTextContents();
+  expect(await titles()).toEqual(["Top", "Bottom"]);
+
+  const bottom = column(page, "Todo").getByRole("article").filter({ hasText: "Bottom" });
+  await drag(page, bottom, column(page, "Todo").getByRole("article").filter({ hasText: "Top" }), 5);
+  await expect.poll(titles).toEqual(["Bottom", "Top"]);
+  await saved(page);
+  await page.reload();
+  expect(await titles()).toEqual(["Bottom", "Top"]);
+});
+
+test("columns can be added, renamed and deleted", async ({ page }) => {
+  await openFreshBoard(page);
+  await page.getByRole("button", { name: "Add column" }).click();
+  await page.getByLabel("New column name").fill("QA");
+  await page.getByLabel("New column name").press("Enter");
+  await expect(column(page, "QA")).toHaveAttribute("aria-busy", "false");
+
+  await page.getByRole("button", { name: "Column actions for QA" }).click();
+  await page.getByRole("menuitem", { name: "Rename" }).click();
+  await page.getByLabel("Column name").fill("Testing");
+  await page.getByLabel("Column name").press("Enter");
+  await expect(column(page, "Testing")).toBeVisible();
+  await saved(page);
+  await page.reload();
+  await expect(column(page, "Testing")).toBeVisible();
+
+  await page.getByRole("button", { name: "Column actions for Testing" }).click();
+  await page.getByRole("menuitem", { name: "Delete column" }).click();
+  await expect(column(page, "Testing")).toBeHidden();
+  await saved(page);
+  await page.reload();
+  await expect(column(page, "Testing")).toBeHidden();
+});
+
+test("a task can be deleted from its sheet", async ({ page }) => {
+  await openFreshBoard(page);
+  await quickAdd(page, "Todo", "Short-lived");
+  await page.getByRole("link", { name: "Short-lived" }).click();
+  await page.getByRole("button", { name: "Delete task" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Delete" }).click();
+  await expect(page.getByText("Deleted ENG-1")).toBeVisible();
+  await expect(column(page, "Todo")).toContainText("No tasks");
+  await saved(page);
+  await page.reload();
+  await expect(column(page, "Todo")).toContainText("No tasks");
+});
+
+test("filters narrow the board and survive a reload", async ({ page }) => {
+  await signInAsDemo(page);
+  await page.getByRole("link", { name: "Engineering", exact: true }).click();
+  await expect(column(page, "Backlog")).toContainText("ENG-1");
+
+  await page.getByRole("button", { name: "Priority" }).click();
+  await page.getByRole("menuitemcheckbox", { name: "Urgent" }).click();
+  await page.keyboard.press("Escape");
+  await expect(page).toHaveURL(/priority=urgent/);
+  await expect(page.getByRole("article")).toHaveCount(1);
+  await expect(page.getByRole("article")).toContainText("ENG-5");
+
+  await saved(page);
+  await page.reload();
+  await expect(page.getByRole("article")).toHaveCount(1);
+
+  await page.getByRole("button", { name: "Clear filters" }).click();
+  await page.getByLabel("Search tasks").fill("kanban");
+  await expect(page).toHaveURL(/q=kanban/);
+  await expect(page.getByRole("article")).toHaveCount(1);
+  await expect(page.getByRole("article")).toContainText("ENG-4");
+});
+
+test("My tasks lists what is assigned to me and opens it on its board", async ({ page }) => {
+  await signInAsDemo(page);
+  await page.getByRole("link", { name: /Build the Kanban board/ }).click();
+  await expect(page).toHaveURL(/\/board\/.+\?task=ENG-4$/);
+  await expect(page.getByRole("dialog", { name: "Build the Kanban board" })).toBeVisible();
+});
+
+test("workspaces and boards are managed from the sidebar", async ({ page }) => {
+  await openFreshBoard(page);
+
+  await page.getByRole("button", { name: "New workspace" }).click();
+  const dialog = page.getByRole("dialog", { name: "New workspace" });
+  await dialog.getByLabel("Workspace name").fill("Design");
+  await expect(dialog.getByLabel("Key prefix")).toHaveValue("DES");
+  await dialog.getByRole("button", { name: "Create workspace" }).click();
+  await expect(page.getByRole("heading", { name: "Design", level: 1 })).toBeVisible();
+
+  await page.getByRole("button", { name: "Workspace actions for Design" }).click();
+  await page.getByRole("menuitem", { name: "New board" }).click();
+  await page.getByLabel("Board name").fill("Roadmap");
+  await page.getByRole("button", { name: "Create board" }).click();
+  await expect(page.getByRole("heading", { name: "Roadmap", level: 1 })).toBeVisible();
+
+  await page.getByRole("button", { name: "Board actions" }).click();
+  await page.getByRole("menuitem", { name: "Edit board" }).click();
+  await page.getByLabel("Board name").fill("Roadmap 2027");
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByRole("heading", { name: "Roadmap 2027", level: 1 })).toBeVisible();
+
+  await page.getByRole("button", { name: "Board actions" }).click();
+  await page.getByRole("menuitem", { name: "Delete board" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Delete board" }).click();
+  await expect(page.getByRole("heading", { name: "My tasks" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Roadmap 2027" })).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Workspace actions for Design" }).click();
+  await page.getByRole("menuitem", { name: "Rename workspace" }).click();
+  await page.getByLabel("Workspace name").fill("Product design");
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByRole("button", { name: "Workspace actions for Product design" })).toBeAttached();
+});
+```
+
+- [ ] **Step 2: Run**
+
+Run: `pnpm test:e2e`
+Expected: `20 passed`. Run it three times (`CI=1 pnpm test:e2e --retries=0`) to check for flakiness; the dry run was 20/20 every time.
+
+- [ ] **Step 3: Docs** — in `README.md` under **Develop**, add: "Mock data from before M2 has no labels; delete `.data/` to reseed." In this file's status table mark M2 `✅ Done` and M3 `Planned when M2 is merged`.
+
+- [ ] **Step 4: Full verification**
+
+Run: `pnpm lint && pnpm typecheck && pnpm test && pnpm test:e2e`
+Expected: 154 unit + 20 e2e green.
+
+- [ ] **Step 5: Commit, push, PR**
+
+```bash
+git add -A
+git commit -m "test(e2e): cover Kanban drag and drop, task sheet, filters and sidebar management"
+git push -u origin m2-kanban
+gh pr create --base main --title "M2: workspaces, boards & Kanban" --body "..."
+```
+Then confirm CI is green on the PR.
+
+---
+
+## M2 Definition of Done
+
+- Create a task (dialog, `C`, or quick-add), drag it across and within columns, reorder columns, and edit every field in the URL-addressable sheet — all persisted and optimistic, with errors surfaced as toasts.
+- Workspaces and boards can be created, renamed and deleted from the sidebar/board header; columns can be added, renamed, reordered and deleted (when empty).
+- Filters (assignee, priority, labels, search) live in the URL and survive reloads; drops while filtered land correctly among hidden cards.
+- My tasks lists the caller's assignments across the team.
+- 154 unit tests (TDD for positions, filters, refs, reducers, repositories, permissions) + 20 e2e tests green locally and in CI.
+
+## Next up: M3
+
+Planned here once M2 is merged: members page with roles (change role, remove, leave team), invite list with resend/revoke and the accept-invite flow (`/invite/[token]`), profile & preferences (name, avatar, theme), team settings with label management, and permission tests for every role.

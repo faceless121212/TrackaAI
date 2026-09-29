@@ -1,6 +1,7 @@
 import type { ComponentProps, ReactNode } from "react";
 import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 type TextFieldProps = ComponentProps<typeof Input> & {
   name: string;
@@ -27,5 +28,36 @@ export function FormError({ message }: { message?: string }) {
     <p role="alert" className="text-destructive text-sm">
       {message}
     </p>
+  );
+}
+
+/** A labelled Radix Select that submits with its form under `name`. */
+export function SelectField({
+  name,
+  label,
+  options,
+  defaultValue,
+}: {
+  name: string;
+  label: string;
+  options: { value: string; label: string }[];
+  defaultValue: string;
+}) {
+  return (
+    <Field>
+      <FieldLabel htmlFor={name}>{label}</FieldLabel>
+      <Select name={name} defaultValue={defaultValue}>
+        <SelectTrigger id={name} className="w-full">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((option) => (
+            <SelectItem key={option.value} value={option.value}>
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </Field>
   );
 }

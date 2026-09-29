@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   assigneeSchema,
+  createCommentInputSchema,
   createInvitesInputSchema,
   createTaskInputSchema,
   keyPrefixSchema,
+  labelSchema,
   signUpInputSchema,
   slugSchema,
   updateTaskInputSchema,
@@ -103,5 +105,17 @@ describe("createInvitesInputSchema", () => {
   it("caps a batch at 10", () => {
     const emails = Array.from({ length: 11 }, (_, i) => `u${i}@example.test`);
     expect(createInvitesInputSchema.safeParse({ teamId: "t1", emails }).success).toBe(false);
+  });
+});
+
+describe("labels and comments", () => {
+  it("accepts palette colours only", () => {
+    expect(labelSchema.safeParse({ id: "l", teamId: "t", name: "Bug", color: "red" }).success).toBe(true);
+    expect(labelSchema.safeParse({ id: "l", teamId: "t", name: "Bug", color: "#ff0000" }).success).toBe(false);
+  });
+
+  it("trims comment bodies and rejects blank ones", () => {
+    expect(createCommentInputSchema.parse({ taskId: "t", body: "  hi  " })).toEqual({ taskId: "t", body: "hi" });
+    expect(createCommentInputSchema.safeParse({ taskId: "t", body: "   " }).success).toBe(false);
   });
 });

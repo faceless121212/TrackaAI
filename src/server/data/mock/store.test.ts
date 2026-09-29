@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { emptyDb } from "./db";
+import { emptyDb, type MockDb } from "./db";
 import { createFileStore, createMemoryStore } from "./store";
 
 const user = (id: string) => ({
@@ -45,6 +45,15 @@ describe("createFileStore", () => {
     expect(await store.read((db) => db.users.length)).toBe(1);
     const onDisk = JSON.parse(await readFile(file, "utf8"));
     expect(onDisk.users[0].id).toBe("seed");
+  });
+
+  it("fills in collections added after the file was written", async () => {
+    const older: Partial<MockDb> = emptyDb();
+    delete older.labels;
+    delete older.comments;
+    await createFileStore(file, () => older as MockDb).read(() => null);
+    const store = createFileStore(file, emptyDb);
+    expect(await store.read((db) => [db.labels, db.comments])).toEqual([[], []]);
   });
 
   it("serialises concurrent writes so none are lost", async () => {

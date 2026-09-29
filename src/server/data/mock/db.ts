@@ -1,7 +1,9 @@
 import type {
   Board,
   Column,
+  Comment,
   Invite,
+  Label,
   Membership,
   Task,
   Team,
@@ -21,6 +23,8 @@ export type MockDb = {
   columns: Column[];
   tasks: Task[];
   invites: Invite[];
+  labels: Label[];
+  comments: Comment[];
 };
 
 export function emptyDb(): MockDb {
@@ -35,5 +39,7 @@ export function emptyDb(): MockDb {
     columns: [],
     tasks: [],
     invites: [],
+    labels: [],
+    comments: [],
   };
 }

@@ -13,3 +13,35 @@ export const requireTeamMember = cache(async (teamSlug: string) => {
   if (!team || !membership) notFound();
   return { user, team, membership };
 });
+
+// The helpers below resolve an entity id up to its team and check membership,
+// so server actions can trust ids coming from the client. Unknown ids and
+// other teams' ids both 404.
+
+export const requireWorkspaceAccess = cache(async (workspaceId: string) => {
+  const user = await requireUser();
+  const repos = getRepositories();
+  const workspace = await repos.workspaces.get(workspaceId);
+  const team = workspace ? await repos.teams.get(workspace.teamId) : null;
+  const membership = team ? await repos.memberships.get(team.id, user.id) : null;
+  if (!workspace || !team || !membership) notFound();
+  return { user, team, membership, workspace };
+});
+
+export const requireBoardAccess = cache(async (boardId: string) => {
+  const board = await getRepositories().boards.get(boardId);
+  if (!board) notFound();
+  return { ...(await requireWorkspaceAccess(board.workspaceId)), board };
+});
+
+export const requireColumnAccess = cache(async (columnId: string) => {
+  const column = await getRepositories().boards.getColumn(columnId);
+  if (!column) notFound();
+  return { ...(await requireBoardAccess(column.boardId)), column };
+});
+
+export const requireTaskAccess = cache(async (taskId: string) => {
+  const task = await getRepositories().tasks.get(taskId);
+  if (!task) notFound();
+  return { ...(await requireBoardAccess(task.boardId)), task };
+});

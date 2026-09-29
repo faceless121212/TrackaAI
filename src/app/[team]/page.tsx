@@ -1,14 +1,57 @@
 import type { Metadata } from "next";
+import Link from "next/link";
+import { LabelChip } from "@/components/tasks/label-chip";
+import { PriorityIcon } from "@/components/tasks/priority";
+import { boardPath } from "@/lib/paths";
+import { requireTeamMember } from "@/server/auth/guards";
+import { getRepositories } from "@/server/data";
 
 export const metadata: Metadata = { title: "My tasks" };
 
-export default function MyTasksPage() {
+export default async function MyTasksPage({ params }: PageProps<"/[team]">) {
+  const { user, team } = await requireTeamMember((await params).team);
+  const repos = getRepositories();
+  const [tasks, labels, workspaces] = await Promise.all([
+    repos.tasks.listAssignedTo(team.id, user.id),
+    repos.labels.listForTeam(team.id),
+    repos.workspaces.listForTeam(team.id),
+  ]);
+  const boards = (await Promise.all(workspaces.map((w) => repos.boards.listForWorkspace(w.id)))).flat();
+  const columns = (await Promise.all(boards.map((b) => repos.boards.listColumns(b.id)))).flat();
+  const boardName = new Map(boards.map((b) => [b.id, b.name]));
+  const columnName = new Map(columns.map((c) => [c.id, c.name]));
+
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-2 text-center">
+    <div className="mx-auto w-full max-w-3xl space-y-4">
       <h1 className="text-2xl font-semibold">My tasks</h1>
-      <p className="text-muted-foreground max-w-sm text-sm">
-        Tasks assigned to you will show up here once boards come alive in the next milestone.
-      </p>
+      {tasks.length === 0 ? (
+        <p className="text-muted-foreground text-sm">
+          Nothing assigned to you yet. Assign yourself a task from any board.
+        </p>
+      ) : (
+        <ul className="divide-y rounded-lg border">
+          {tasks.map((task) => (
+            <li key={task.id}>
+              <Link
+                href={`${boardPath(team.slug, task.boardId)}?task=${task.key}`}
+                className="hover:bg-muted/50 flex items-center gap-3 px-4 py-3 text-sm"
+              >
+                <PriorityIcon priority={task.priority} />
+                <span className="text-muted-foreground w-16 shrink-0 font-mono text-xs">{task.key}</span>
+                <span className="min-w-0 flex-1 truncate font-medium">{task.title}</span>
+                {labels
+                  .filter((label) => task.labelIds.includes(label.id))
+                  .map((label) => (
+                    <LabelChip key={label.id} label={label} />
+                  ))}
+                <span className="text-muted-foreground hidden text-xs sm:inline">
+                  {boardName.get(task.boardId)} · {columnName.get(task.columnId)}
+                </span>
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

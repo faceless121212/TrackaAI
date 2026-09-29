@@ -1,4 +1,4 @@
-import { Layers, LogOut, SquareKanban } from "lucide-react";
+import { Layers, LogOut } from "lucide-react";
 import Link from "next/link";
 import {
   Sidebar,
@@ -12,15 +12,16 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarMenuSub,
-  SidebarMenuSubButton,
   SidebarMenuSubItem,
   SidebarRail,
 } from "@/components/ui/sidebar";
 import type { Board, Team, User, Workspace } from "@/lib/domain";
 import { boardPath } from "@/lib/paths";
 import { signOutAction } from "@/server/actions/auth";
+import { BoardLink } from "./board-link";
 import { navItems } from "./nav-items";
 import { TeamSwitcher } from "./team-switcher";
+import { NewWorkspaceButton, WorkspaceMenu } from "./workspace-actions";
 
 export type SidebarWorkspace = Workspace & { boards: Board[] };
 
@@ -29,11 +30,14 @@ export function AppSidebar({
   team,
   teams,
   workspaces,
+  canManage,
 }: {
   user: User;
   team: Team;
   teams: Team[];
   workspaces: SidebarWorkspace[];
+  /** Owners and admins can create, rename and delete workspaces and boards. */
+  canManage: boolean;
 }) {
   return (
     <Sidebar collapsible="icon">
@@ -59,6 +63,7 @@ export function AppSidebar({
         </SidebarGroup>
         <SidebarGroup>
           <SidebarGroupLabel>Workspaces</SidebarGroupLabel>
+          {canManage && <NewWorkspaceButton teamSlug={team.slug} />}
           <SidebarGroupContent>
             {workspaces.length === 0 ? (
               <p className="text-muted-foreground px-2 text-xs group-data-[collapsible=icon]:hidden">
@@ -74,15 +79,11 @@ export function AppSidebar({
                         <span>{workspace.name}</span>
                       </span>
                     </SidebarMenuButton>
+                    {canManage && <WorkspaceMenu workspace={workspace} />}
                     <SidebarMenuSub>
                       {workspace.boards.map((board) => (
                         <SidebarMenuSubItem key={board.id}>
-                          <SidebarMenuSubButton asChild>
-                            <Link href={boardPath(team.slug, board.id)}>
-                              <SquareKanban />
-                              <span>{board.name}</span>
-                            </Link>
-                          </SidebarMenuSubButton>
+                          <BoardLink href={boardPath(team.slug, board.id)} name={board.name} />
                         </SidebarMenuSubItem>
                       ))}
                     </SidebarMenuSub>

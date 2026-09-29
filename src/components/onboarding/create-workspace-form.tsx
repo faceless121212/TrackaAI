@@ -5,11 +5,19 @@ import { TextField } from "@/components/forms/fields";
 import { Button } from "@/components/ui/button";
 import { FieldGroup } from "@/components/ui/field";
 import { suggestKeyPrefix } from "@/lib/domain";
-import { initialFormState } from "@/lib/forms";
-import { createWorkspaceAction } from "@/server/actions/onboarding";
+import { initialFormState, type FormState } from "@/lib/forms";
 
-export function CreateWorkspaceForm({ teamSlug }: { teamSlug: string }) {
-  const [state, action, pending] = useActionState(createWorkspaceAction, initialFormState);
+/** Used by onboarding (→ invite step) and the sidebar (→ new board); each passes its own action. */
+export function CreateWorkspaceForm({
+  teamSlug,
+  action: workspaceAction,
+  submitLabel = "Continue",
+}: {
+  teamSlug: string;
+  action: (prev: FormState, formData: FormData) => Promise<FormState>;
+  submitLabel?: string;
+}) {
+  const [state, action, pending] = useActionState(workspaceAction, initialFormState);
   const [name, setName] = useState("");
   const [keyPrefix, setKeyPrefix] = useState("");
   const [prefixTouched, setPrefixTouched] = useState(false);
@@ -46,7 +54,7 @@ export function CreateWorkspaceForm({ teamSlug }: { teamSlug: string }) {
         />
       </FieldGroup>
       <Button type="submit" className="w-full" disabled={pending}>
-        Continue
+        {submitLabel}
       </Button>
     </form>
   );

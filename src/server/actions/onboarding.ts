@@ -13,12 +13,8 @@ import { boardPath, onboardingInvitePath, onboardingWorkspacePath, teamPath } fr
 import { requireTeamMember } from "@/server/auth/guards";
 import { assertCan } from "@/server/auth/permissions";
 import { requireUser } from "@/server/auth/session";
-import { ConflictError, getRepositories } from "@/server/data";
-
-function conflictToFormState(error: unknown, values: Record<string, string>): FormState {
-  if (error instanceof ConflictError) return { fieldErrors: { [error.field]: [error.message] }, values };
-  throw error;
-}
+import { getRepositories } from "@/server/data";
+import { conflictToFormState, createWorkspaceWithBoard } from "./shared";
 
 export async function createTeamAction(_prev: FormState, formData: FormData): Promise<FormState> {
   const user = await requireUser();
@@ -45,13 +41,9 @@ export async function createWorkspaceAction(_prev: FormState, formData: FormData
   });
   if (!parsed.success) return { fieldErrors: z.flattenError(parsed.error).fieldErrors, values };
 
-  const repos = getRepositories();
   let boardId: string;
   try {
-    const workspace = await repos.workspaces.create(parsed.data);
-    // PRD §5.1: onboarding lands on a seeded default board.
-    const board = await repos.boards.create({ workspaceId: workspace.id, name: workspace.name, description: null });
-    boardId = board.id;
+    boardId = (await createWorkspaceWithBoard(parsed.data)).board.id;
   } catch (error) {
     return conflictToFormState(error, values);
   }

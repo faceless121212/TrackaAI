@@ -70,8 +70,8 @@ export function BoardColumn({
             ref={setActivatorNodeRef}
             type="button"
             aria-label={`Reorder ${column.name}`}
-            // Out of the flow so the header lines up like Linear's; shown on hover/focus.
-            className="text-muted-foreground hover:text-foreground absolute top-1/2 -left-3.5 -translate-y-1/2 cursor-grab touch-none opacity-0 group-hover/column:opacity-100 focus-visible:opacity-100"
+            // Out of the flow so the header lines up like Linear's; shown on hover/focus, always on touch.
+            className="text-muted-foreground hover:text-foreground absolute top-1/2 -left-3.5 -translate-y-1/2 cursor-grab touch-none opacity-0 group-hover/column:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
             {...attributes}
             {...listeners}
           >

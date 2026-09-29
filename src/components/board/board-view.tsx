@@ -305,7 +305,8 @@ export function BoardView(props: BoardViewProps) {
         }}
       >
         <SortableContext items={columns.map((column) => column.id)} strategy={horizontalListSortingStrategy}>
-          <div className="flex min-h-0 flex-1 items-start gap-3 overflow-x-auto pb-2">
+          {/* -ml-4/pl-4: room inside the scroll area for the first column's hover grip. */}
+          <div className="-ml-4 flex min-h-0 flex-1 items-start gap-3 overflow-x-auto pb-2 pl-4">
             {columns.map((column) => (
               <BoardColumn
                 key={column.id}

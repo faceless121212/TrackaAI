@@ -33,7 +33,7 @@ export function TaskCardView({ task, href, labels, assignee, className }: CardPr
         {assignee ? (
           <MemberAvatar member={assignee} className="size-3.5" fallbackClassName="text-[6px]" />
         ) : (
-          <CircleUserRound aria-label="Unassigned" className="text-muted-foreground/70 size-3.5" />
+          <CircleUserRound role="img" aria-label="Unassigned" className="text-muted-foreground size-3.5" />
         )}
       </div>
       {/* Stretched link: the whole card opens the task; drags start from the card. */}

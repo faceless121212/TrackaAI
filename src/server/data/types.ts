@@ -2,11 +2,15 @@ import type {
   Board,
   Column,
   CreateBoardInput,
+  CreateInvitesInput,
   CreateTaskInput,
   CreateTeamInput,
   CreateWorkspaceInput,
+  Invite,
   Membership,
   Role,
+  SignInInput,
+  SignUpInput,
   Task,
   Team,
   UpdateTaskInput,
@@ -16,11 +20,18 @@ import type {
 
 // Every backend (mock in M1, Supabase in M4) implements these. UI and server
 // actions depend only on this file, never on a concrete backend.
+// Methods throw NotFoundError / ConflictError from ./errors.
+
+export interface AuthRepo {
+  /** Creates the user and their credentials. Throws ConflictError("email") if taken. */
+  signUp(input: SignUpInput): Promise<User>;
+  /** Returns the user, or null for an unknown email or wrong password. */
+  signIn(input: SignInInput): Promise<User | null>;
+}
 
 export interface UsersRepo {
   getById(id: string): Promise<User | null>;
   getByEmail(email: string): Promise<User | null>;
-  create(input: { email: string; name: string }): Promise<User>;
 }
 
 export interface TeamsRepo {
@@ -60,11 +71,19 @@ export interface TasksRepo {
   move(id: string, to: { columnId: string; position: string }): Promise<Task>;
 }
 
+export interface InvitesRepo {
+  /** Creates member invites valid for INVITE_TTL_DAYS, skipping existing members and pending invites. */
+  create(input: CreateInvitesInput & { invitedBy: string }): Promise<Invite[]>;
+  listPending(teamId: string): Promise<Invite[]>;
+}
+
 export interface Repositories {
+  auth: AuthRepo;
   users: UsersRepo;
   teams: TeamsRepo;
   memberships: MembershipsRepo;
   workspaces: WorkspacesRepo;
   boards: BoardsRepo;
   tasks: TasksRepo;
+  invites: InvitesRepo;
 }

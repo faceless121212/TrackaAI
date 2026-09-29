@@ -15289,13 +15289,22 @@ Queue auto-merge (merge commit) so the PR lands when CI passes.
 
 ---
 
+## Pre-PR review (applied after Task 8)
+
+The `pre-pr-reviewer` subagent found no authorization gaps. Its verified findings were fixed as separate commits:
+- **Open redirect:** `safeNextPath` accepted `"/\t/evil.test"` (browsers strip tab/CR/LF → `//evil.test`). It now resolves `next` against a dummy origin and requires the origin to be unchanged; tests cover `\t`, `\n`, `\r`.
+- **Host-header poisoning:** invite links came from `Host`/`X-Forwarded-Host`. `resolveAppOrigin` (`src/lib/app-url.ts`, tested) uses `APP_URL` and refuses the header fallback in production; `APP_URL` is in `.env.example` and the Playwright web server.
+- Label deletion now asks for confirmation; used invites say "already used" instead of "expired"; avatar URLs must be http(s).
+
+Deferred nits: `assertCan` in two form actions throws instead of returning a form error (UI hides those controls); `acceptInviteAction` doesn't Zod-validate the token (unknown tokens already 404).
+
 ## M3 Definition of Done
 
 - A second user is invited (link copied from the members page), signs up through the link, joins with the invited role and collaborates on the board — covered by e2e with two browser contexts.
 - Roles change, members are removed, ownership transfers, and non-owners can leave; every rule lives in `permissions.ts` and is unit-tested.
 - Pending invites can be copied, resent (old link dies) and revoked; wrong-account and expired links explain themselves.
 - Labels, the team name and the profile (name, avatar URL, theme) are editable; the theme follows the user across devices.
-- 177 unit tests + 28 e2e tests green locally and in CI.
+- 183 unit tests (177 from the plan + 6 from the review fixes) + 28 e2e tests green locally and in CI.
 
 ## Next up: M4
 

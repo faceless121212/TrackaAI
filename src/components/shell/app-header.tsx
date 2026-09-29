@@ -7,7 +7,7 @@ export function AppHeader() {
   return (
     <header className="flex h-12 shrink-0 items-center gap-2 border-b px-3">
       <SidebarTrigger />
-      <Separator orientation="vertical" className="mx-1 h-4" />
+      <Separator orientation="vertical" className="mx-1 data-vertical:h-4 data-vertical:self-center" />
       <div className="ml-auto flex items-center gap-1">
         <CommandMenu />
         <ThemeToggle />

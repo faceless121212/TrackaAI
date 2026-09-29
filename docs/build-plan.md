@@ -52,6 +52,8 @@ This file holds the detailed, task-level plan for the **current** milestone. Eac
 7. The shadcn `Sidebar` tooltips need a `TooltipProvider` at the root, or prerendering fails.
 8. `tsc --noEmit` needs Next's generated route types (`PageProps<"/sign-in">`) → `typecheck` runs `next typegen` first.
 9. Vitest: use `globals: true` (Testing Library auto-cleanup) **and** import `describe/it/expect` from `"vitest"` explicitly (so `tsc` is happy). cmdk needs `ResizeObserver` and `scrollIntoView` stubs in jsdom.
+10. `shadcn init` writes `--font-sans: var(--font-sans)` (a self-reference → serif fallback) in `globals.css` → point `--font-sans` and `--font-heading` at `var(--font-geist-sans)`.
+11. The nova `Separator` is `data-vertical:self-stretch`; with a fixed height it pins to the top of the header → use `data-vertical:h-4 data-vertical:self-center`.
 
 ## File map (end of M0)
 
@@ -729,6 +731,8 @@ grep -rl 'from "cn"' src | xargs sed -i '' 's#from "cn"#from "@/lib/utils"#'
 Then make `src/lib/utils.ts` the classic `cn()` (`twMerge(clsx(inputs))`) — see gotcha 4.
 Expected: `components.json` has `"style": "radix-nova"`; `src/components/ui/` contains the listed components; `next-themes` is in dependencies.
 
+- [ ] **Step 1b: Fix the font tokens** (gotcha 10) — in `src/app/globals.css` set `--font-sans: var(--font-geist-sans);` and `--font-heading: var(--font-geist-sans);`.
+
 - [ ] **Step 2: Replace** `src/hooks/use-mobile.ts` (gotcha 5)
 
 ```ts
@@ -1333,7 +1337,7 @@ export function AppHeader() {
   return (
     <header className="flex h-12 shrink-0 items-center gap-2 border-b px-3">
       <SidebarTrigger />
-      <Separator orientation="vertical" className="mx-1 h-4" />
+      <Separator orientation="vertical" className="mx-1 data-vertical:h-4 data-vertical:self-center" />
       <div className="ml-auto flex items-center gap-1">
         <CommandMenu />
         <ThemeToggle />

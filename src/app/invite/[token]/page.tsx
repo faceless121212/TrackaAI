@@ -32,10 +32,10 @@ export default async function InvitePage({ params }: PageProps<"/invite/[token]"
   const { token } = await params;
   const user = await requireUser();
   const repos = getRepositories();
-  const invite = await repos.invites.getByToken(token);
-  const team = invite ? await repos.teams.get(invite.teamId) : null;
+  // Not a member yet, so the team's own tables are hidden (RLS): preview returns just enough.
+  const preview = await repos.invites.preview(token);
 
-  if (!invite || !team) {
+  if (!preview) {
     return (
       <InviteCard title="Invite not found" description="This link is invalid or was revoked. Ask for a new invite.">
         <Button asChild variant="outline" className="w-full">
@@ -45,6 +45,8 @@ export default async function InvitePage({ params }: PageProps<"/invite/[token]"
     );
   }
 
+  const { invite, inviterName } = preview;
+  const team = { id: invite.teamId, name: preview.teamName, slug: preview.teamSlug };
   const membership = await repos.memberships.get(team.id, user.id);
   if (membership) {
     return (
@@ -84,11 +86,10 @@ export default async function InvitePage({ params }: PageProps<"/invite/[token]"
     );
   }
 
-  const inviter = await repos.users.getById(invite.invitedBy);
   return (
     <InviteCard
       title={`Join ${team.name}`}
-      description={`${inviter?.name ?? "A teammate"} invited you to join as ${invite.role === "admin" ? "an admin" : "a member"}.`}
+      description={`${inviterName ?? "A teammate"} invited you to join as ${invite.role === "admin" ? "an admin" : "a member"}.`}
     >
       <AcceptInviteButton token={token} teamName={team.name} />
     </InviteCard>

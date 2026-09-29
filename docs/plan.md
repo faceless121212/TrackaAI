@@ -44,22 +44,18 @@ Each milestone gets a detailed task-level plan in [`docs/build-plan.md`](./build
 
 **Done when:** a second user can be invited, join, and collaborate; permission tests pass.
 
-## M4 — Supabase (local, Docker)
-**Prereq:** a container runtime (OrbStack recommended) installed.
-- `supabase init` / `supabase start`; schema migrations for all PRD entities; **RLS** on every table; seed script.
-- Supabase Auth replaces mock auth (email+password, magic link); `proxy.ts` uses `@supabase/ssr` for session refresh.
-- Supabase repository implementations; generated DB types; `DATA_BACKEND=supabase`.
-- Realtime subscriptions on the board.
-- Use **Supabase MCP** for migrations/SQL inspection.
+## M4 — Supabase (hosted) ✅
+No Docker: a hosted Supabase project (free plan), managed through the **Supabase MCP** connector.
+- Schema migrations for all current entities with **RLS** on every table (team-scoped; roles mirror `permissions.ts`); RLS helpers live in a non-exposed `private` schema; multi-row invariants are SQL functions (team creation, atomic task numbers, invite acceptance, ownership transfer).
+- Schema and RLS are tested **in PGlite** (Postgres in WASM) in the normal unit suite — cross-team isolation, role limits, grants.
+- Supabase Auth replaces mock auth; **"Confirm email" stays on** (check-your-inbox screen + `/auth/callback`); `proxy.ts` refreshes sessions with `@supabase/ssr`.
+- Supabase repository implementations behind the same interfaces (`DATA_BACKEND=supabase`), verified by live integration tests (`pnpm test:supabase`) as two seeded users; generated DB types.
+- Realtime board updates.
 
-**Done when:** all M1–M3 e2e tests pass against local Supabase; RLS tests prove cross-team isolation.
+**Done:** CI keeps running unit + e2e on the mock backend; the live project is covered by the integration tests and a scripted end-to-end run.
 
-## M5 — Emails (Resend)
-- React Email templates: welcome, invite.
-- Welcome on team creation, invite on invite create/resend.
-- Local dev: Resend test mode / Supabase Inbucket for auth mail. Use **Resend MCP** for domain & test sends.
-
-**Done when:** onboarding and invite send real (test) emails.
+## M5 — Emails (Resend) — skipped
+Skipped by decision (2026-09-29). Invites use the members page's **Copy link** (and a server log line); Supabase's built-in mailer sends the sign-up confirmation emails. `deliverInvites()` is the single seam if email is added later. Before launch, configure a real SMTP provider in Supabase Auth.
 
 ## M6 — Billing (Stripe)
 - Products/prices for Lite & Pro (monthly/yearly) created via **Stripe MCP** in test mode.
@@ -91,7 +87,6 @@ Each milestone gets a detailed task-level plan in [`docs/build-plan.md`](./build
 
 ### Dependencies
 ```
-M0 → M1 → M2 → M3 → M4 → M5
-                        ↘ M6 → M7 → M8 → M9 → M10
+M0 → M1 → M2 → M3 → M4 → M6 → M7 → M8 → M9 → M10     (M5 skipped)
 ```
-M5 and M6 can run in parallel after M4. M7 technically only needs M2, but plan metering needs M6.
+M7 technically only needs M2, but plan metering needs M6.

@@ -18,6 +18,7 @@ import { ConflictError, NotFoundError } from "../errors";
 import type { Repositories } from "../types";
 import type { MockDb } from "./db";
 import { hashPassword, verifyPassword } from "./password";
+import { createMemorySession, type SessionStore } from "./session";
 import type { MockStore } from "./store";
 
 const DAY_MS = 86_400_000;
@@ -72,13 +73,13 @@ function deleteBoards(db: MockDb, boardIds: Set<string>) {
   db.boards = db.boards.filter((b) => !boardIds.has(b.id));
 }
 
-export function createMockRepositories(store: MockStore): Repositories {
+export function createMockRepositories(store: MockStore, session: SessionStore = createMemorySession()): Repositories {
   return {
     auth: {
       async signUp({ name, email, password }) {
         const normalized = email.toLowerCase();
         const passwordHash = await hashPassword(password);
-        return store.write((db) => {
+        const user = await store.write((db) => {
           if (db.users.some((u) => u.email === normalized)) {
             throw new ConflictError("email", "An account with this email already exists");
           }
@@ -87,6 +88,8 @@ export function createMockRepositories(store: MockStore): Repositories {
           db.credentials.push({ userId: user.id, passwordHash });
           return user;
         });
+        await session.set(user.id);
+        return { user, needsConfirmation: false };
       },
 
       async signIn({ email, password }) {
@@ -96,8 +99,14 @@ export function createMockRepositories(store: MockStore): Repositories {
           return user && credentials ? { user, passwordHash: credentials.passwordHash } : null;
         });
         if (!found || !(await verifyPassword(password, found.passwordHash))) return null;
+        await session.set(found.user.id);
         return found.user;
       },
+
+      signOut: () => session.clear(),
+      currentUserId: () => session.get(),
+      // The mock has no email step, so there are never links to confirm.
+      confirmEmail: async () => false,
     },
 
     users: {
@@ -418,6 +427,14 @@ export function createMockRepositories(store: MockStore): Repositories {
         }),
       get: (id) => store.read((db) => db.invites.find((i) => i.id === id) ?? null),
       getByToken: (token) => store.read((db) => db.invites.find((i) => i.token === token) ?? null),
+      preview: (token) =>
+        store.read((db) => {
+          const invite = db.invites.find((i) => i.token === token);
+          const team = invite && db.teams.find((t) => t.id === invite.teamId);
+          if (!invite || !team) return null;
+          const inviter = db.users.find((u) => u.id === invite.invitedBy);
+          return { invite, teamName: team.name, teamSlug: team.slug, inviterName: inviter?.name ?? null };
+        }),
       resend: (id) =>
         store.write((db) => {
           const invite = find(db.invites, (i) => i.id === id, "Invite", id);

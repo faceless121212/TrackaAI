@@ -7,4 +7,7 @@ class ResizeObserverStub {
   disconnect() {}
 }
 globalThis.ResizeObserver ??= ResizeObserverStub as unknown as typeof ResizeObserver;
-Element.prototype.scrollIntoView ??= function scrollIntoView() {};
+// Database tests run in the node environment, where there is no DOM.
+if (typeof Element !== "undefined") {
+  Element.prototype.scrollIntoView ??= function scrollIntoView() {};
+}

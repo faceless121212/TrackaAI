@@ -3,7 +3,9 @@ import { notFound } from "next/navigation";
 import { BoardView } from "@/components/board/board-view";
 import { requireTeamMember } from "@/server/auth/guards";
 import { can } from "@/server/auth/permissions";
+import { supabaseConfig } from "@/lib/supabase/config";
 import { getRepositories } from "@/server/data";
+import { resolveDataBackend } from "@/server/data/backend";
 
 export const metadata: Metadata = { title: "Board" };
 
@@ -44,6 +46,9 @@ export default async function BoardPage({ params, searchParams }: PageProps<"/[t
       currentUserId={user.id}
       canManage={can(membership.role, "column:manage")}
       canModerate={can(membership.role, "comment:moderate")}
+      realtime={
+        resolveDataBackend(process.env.DATA_BACKEND) === "supabase" ? supabaseConfig() : null
+      }
     />
   );
 }

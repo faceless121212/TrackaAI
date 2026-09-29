@@ -51,6 +51,7 @@ import { BoardToolbar } from "./board-toolbar";
 import { CreateTaskDialog } from "./create-task-dialog";
 import { SortableTaskCard, TaskCardView } from "./task-card";
 import { TaskSheet } from "./task-sheet";
+import { useBoardRealtime, type RealtimeConfig } from "./use-board-realtime";
 
 export type BoardViewProps = {
   board: Board;
@@ -64,6 +65,8 @@ export type BoardViewProps = {
   currentUserId: string;
   canManage: boolean;
   canModerate: boolean;
+  /** Supabase Realtime settings, or null on the mock backend. */
+  realtime: RealtimeConfig;
 };
 
 function isTyping(target: EventTarget | null) {
@@ -92,6 +95,11 @@ export function BoardView(props: BoardViewProps) {
   );
   const counts = useMemo(() => groupTasks(columns, tasks), [columns, tasks]);
   const taskById = useMemo(() => new Map(tasks.map((task) => [task.id, task])), [tasks]);
+  const rowIds = useMemo(
+    () => new Set([...props.tasks.map((task) => task.id), ...props.columns.map((column) => column.id)]),
+    [props.tasks, props.columns],
+  );
+  useBoardRealtime(board.id, props.realtime, rowIds);
   const items =
     dragItems ?? Object.fromEntries(Object.entries(visible).map(([id, list]) => [id, list.map((t) => t.id)]));
 

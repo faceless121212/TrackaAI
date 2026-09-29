@@ -25,3 +25,6 @@ export const DEFAULT_LABELS = [
   { name: "Improvement", color: "blue" },
   { name: "Docs", color: "gray" },
 ] as const;
+
+// "system" follows the OS; dark is the app default (PRD §6).
+export const THEMES = ["system", "light", "dark"] as const;

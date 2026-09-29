@@ -10,6 +10,7 @@ import type {
   CreateTeamInput,
   CreateWorkspaceInput,
   Invite,
+  InviteRole,
   Label,
   Membership,
   Role,
@@ -119,7 +120,7 @@ export interface CommentsRepo {
 
 export interface InvitesRepo {
   /** Creates member invites valid for INVITE_TTL_DAYS, skipping existing members and pending invites. */
-  create(input: CreateInvitesInput & { invitedBy: string }): Promise<Invite[]>;
+  create(input: Omit<CreateInvitesInput, "role"> & { role?: InviteRole; invitedBy: string }): Promise<Invite[]>;
   listPending(teamId: string): Promise<Invite[]>;
 }
 

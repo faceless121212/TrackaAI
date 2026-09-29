@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import type { FormState } from "@/lib/forms";
 import { teamPath } from "@/lib/paths";
 import { requireUser } from "@/server/auth/session";
+import { assertSeatToJoin } from "@/server/billing/limits";
 import { ConflictError, NotFoundError, getRepositories } from "@/server/data";
 
 export async function acceptInviteAction(token: string): Promise<FormState> {
@@ -12,6 +13,8 @@ export async function acceptInviteAction(token: string): Promise<FormState> {
   const repos = getRepositories();
   let teamId: string;
   try {
+    const preview = await repos.invites.preview(token);
+    if (preview) await assertSeatToJoin(repos, preview.invite.teamId);
     teamId = (await repos.invites.accept(token, user.id)).teamId;
   } catch (error) {
     if (error instanceof ConflictError) return { formError: error.message };

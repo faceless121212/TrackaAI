@@ -45,7 +45,7 @@ describe("plan limits", () => {
       "The Free plan is for one person. Upgrade to Lite to invite teammates.",
     );
     expect(planLimitMessage("lite", "workspaces")).toBe(
-      "The Lite plan includes up to 10 projects. Upgrade to Pro for unlimited projects.",
+      "The Lite plan includes up to 10 workspaces. Upgrade to Pro for unlimited workspaces.",
     );
   });
 

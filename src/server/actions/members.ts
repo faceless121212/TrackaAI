@@ -7,7 +7,7 @@ import { formValues, type ActionResult, type FormState } from "@/lib/forms";
 import { requireInviteAccess, requireTeamMember } from "@/server/auth/guards";
 import { assertCan, assignableRoles, canLeaveTeam, canManageMember } from "@/server/auth/permissions";
 import { getRepositories } from "@/server/data";
-import { deliverInvites, toActionError, zodToFormState } from "./shared";
+import { assertRoomForInvites, conflictToFormState, deliverInvites, toActionError, zodToFormState } from "./shared";
 
 export async function inviteMembersAction(_prev: FormState, formData: FormData): Promise<FormState> {
   const values = formValues(formData, ["teamSlug", "emails", "role"]);
@@ -20,7 +20,13 @@ export async function inviteMembersAction(_prev: FormState, formData: FormData):
   });
   if (!parsed.success) return zodToFormState(parsed.error, values);
 
-  const invites = await getRepositories().invites.create({ ...parsed.data, invitedBy: user.id });
+  let invites;
+  try {
+    await assertRoomForInvites(team, parsed.data.emails);
+    invites = await getRepositories().invites.create({ ...parsed.data, invitedBy: user.id });
+  } catch (error) {
+    return conflictToFormState(error, values, team.slug);
+  }
   await deliverInvites(invites);
   refresh();
   const skipped = parsed.data.emails.length - invites.length;

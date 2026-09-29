@@ -43,7 +43,7 @@ export const PLAN_CATALOG: Record<Plan, PlanInfo> = {
 
 const RESOURCE_NOUN: Record<PlanResource, string> = {
   members: "teammates",
-  workspaces: "projects",
+  workspaces: "workspaces",
   aiRuns: "AI runs",
 };
 

@@ -1,17 +1,21 @@
 import "server-only";
 import { headers } from "next/headers";
 import { z } from "zod";
-import type { CreateWorkspaceInput, Invite, UpdateTaskInput } from "@/lib/domain";
+import type { CreateWorkspaceInput, Invite, Team, UpdateTaskInput } from "@/lib/domain";
 import { invalidTaskRef } from "@/lib/domain";
 import { resolveAppOrigin } from "@/lib/app-url";
 import type { ActionResult, FormState } from "@/lib/forms";
-import { invitePath } from "@/lib/paths";
+import { invitePath, settingsPath } from "@/lib/paths";
 import { ForbiddenError } from "@/server/auth/permissions";
-import { ConflictError, NotFoundError, getRepositories } from "@/server/data";
+import { assertWithinPlan, countNewInvitees } from "@/server/billing/limits";
+import { ConflictError, NotFoundError, PlanLimitError, getRepositories } from "@/server/data";
 
 // Helpers for the "use server" modules in this folder (not an action module itself).
 
-export function conflictToFormState(error: unknown, values: Record<string, string>): FormState {
+export function conflictToFormState(error: unknown, values: Record<string, string>, teamSlug?: string): FormState {
+  if (error instanceof PlanLimitError) {
+    return { formError: error.message, upgradeHref: teamSlug ? settingsPath(teamSlug, "billing") : undefined, values };
+  }
   if (error instanceof ConflictError) return { fieldErrors: { [error.field]: [error.message] }, values };
   throw error;
 }
@@ -29,8 +33,9 @@ export function toActionError(error: unknown): ActionResult {
 }
 
 /** Creates a workspace plus its default board (PRD §5.1). */
-export async function createWorkspaceWithBoard(input: CreateWorkspaceInput) {
+export async function createWorkspaceWithBoard(team: Pick<Team, "id" | "plan">, input: CreateWorkspaceInput) {
   const repos = getRepositories();
+  await assertWithinPlan(repos, team, "workspaces");
   const workspace = await repos.workspaces.create(input);
   const board = await repos.boards.create({ workspaceId: workspace.id, name: workspace.name, description: null });
   return { workspace, board };
@@ -64,4 +69,11 @@ export async function deliverInvites(invites: Invite[]) {
   for (const invite of invites) {
     console.info(`[invite] ${invite.email} (${invite.role}) → ${await absoluteUrl(invitePath(invite.token))}`);
   }
+}
+
+/** Throws PlanLimitError if inviting `emails` would take the team past its plan's size. */
+export async function assertRoomForInvites(team: Pick<Team, "id" | "plan">, emails: string[]) {
+  const repos = getRepositories();
+  const adding = await countNewInvitees(repos, team.id, emails);
+  if (adding > 0) await assertWithinPlan(repos, team, "members", adding);
 }

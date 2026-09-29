@@ -7,7 +7,7 @@ import { DEMO_USER } from "@/server/data/mock/seed";
 export const metadata: Metadata = { title: "Sign in" };
 
 export default async function SignInPage({ searchParams }: PageProps<"/sign-in">) {
-  const { next } = await searchParams;
+  const { next, confirm } = await searchParams;
   const isMock = resolveDataBackend(process.env.DATA_BACKEND) === "mock";
 
   return (
@@ -22,7 +22,12 @@ export default async function SignInPage({ searchParams }: PageProps<"/sign-in">
           </CardDescription>
         )}
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-4">
+        {confirm === "failed" && (
+          <p role="alert" className="text-destructive text-sm">
+            That confirmation link is invalid or has expired. Sign in, or sign up again to get a new link.
+          </p>
+        )}
         <SignInForm next={typeof next === "string" ? next : "/"} />
       </CardContent>
     </Card>

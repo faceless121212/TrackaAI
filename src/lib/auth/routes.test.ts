@@ -16,8 +16,9 @@ describe("isPublicPath", () => {
 });
 
 describe("isOpenPath", () => {
-  it("lets /sign-out through regardless of session", () => {
+  it("lets /sign-out and the email-confirmation callback through regardless of session", () => {
     expect(isOpenPath("/sign-out")).toBe(true);
+    expect(isOpenPath("/auth/callback")).toBe(true);
     expect(isOpenPath("/sign-in")).toBe(false);
     expect(isOpenPath("/")).toBe(false);
   });

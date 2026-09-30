@@ -24,7 +24,7 @@ import {
   type User,
   type Workspace,
 } from "@/lib/domain";
-import { ConflictError, NotFoundError, PlanLimitError } from "../errors";
+import { AGENT_BUSY, AGENT_DAILY_LIMIT, AGENT_NOT_ASSIGNED, ConflictError, NotFoundError, PlanLimitError } from "../errors";
 import type { Repositories } from "../types";
 import type { Database } from "./database.types";
 
@@ -142,9 +142,10 @@ const toTask = (r: Row<"tasks">, labelIds: string[]): Task => ({
 const toComment = (r: Row<"comments">): Comment => ({
   id: r.id,
   taskId: r.task_id,
-  author: r.author_user_id
-    ? { kind: "user", userId: r.author_user_id }
-    : { kind: "agent", agentId: r.author_agent_id ?? "unknown" },
+  // Both ids are null once the author (member or agent) is deleted: show them as a former member.
+  author: r.author_agent_id
+    ? { kind: "agent", agentId: r.author_agent_id }
+    : { kind: "user", userId: r.author_user_id ?? "deleted" },
   body: r.body,
   createdAt: iso(r.created_at),
 });
@@ -185,6 +186,9 @@ const RAISED: Record<string, () => Error> = {
   assignee_not_member: () => new ConflictError("assignee", "That person isn't a member of this team"),
   agent_not_found: () => new NotFoundError("Agent", "id"),
   agents_require_pro: () => new ConflictError("plan", "AI teammates are part of the Pro plan."),
+  agent_not_assigned: () => new ConflictError("agent", AGENT_NOT_ASSIGNED),
+  agent_busy: () => new ConflictError("agent", AGENT_BUSY),
+  agent_daily_limit: () => new ConflictError("agent", AGENT_DAILY_LIMIT),
   run_not_running: () => new NotFoundError("Run", "id"),
   not_owner: () => new ConflictError("owner", "Only the owner can transfer ownership"),
 };
@@ -610,6 +614,7 @@ export function createSupabaseRepositories(client: () => Promise<Client>): Repos
             p_description: input.description,
             p_priority: input.priority,
             p_assignee_user: input.assignee?.kind === "user" ? input.assignee.userId : null,
+            p_assignee_agent: input.assignee?.kind === "agent" ? input.assignee.agentId : null,
             p_label_ids: input.labelIds,
             p_due_date: input.dueDate,
             p_parent: input.parentId,

@@ -139,8 +139,11 @@ describe("AI teammates", () => {
   async function proBoard() {
     const setup = await setupBoard();
     await repos.teams.setPlan(setup.team.id, "pro");
-    const task = await repos.tasks.create(taskInput(setup.board.id, setup.columns[0].id, "Write spec"));
     const agent = await repos.agents.create(setup.team.id, { name: "Spec writer", specialty: "Specs", createdBy: owner.id });
+    const task = await repos.tasks.create({
+      ...taskInput(setup.board.id, setup.columns[0].id, "Write spec"),
+      assignee: { kind: "agent", agentId: agent.id },
+    });
     return { ...setup, task, agent };
   }
 
@@ -180,6 +183,22 @@ describe("AI teammates", () => {
     const other = await repos.teams.create({ name: "Other", slug: "other", ownerId: owner.id });
     const stranger = await repos.agents.create(other.id, { name: "Bot", specialty: "", createdBy: owner.id });
     await expect(repos.agentRuns.start(task.id, stranger.id, owner.id)).rejects.toBeInstanceOf(NotFoundError);
+  });
+
+  it("needs the task assigned to the agent, times out stale runs and forgets runs of deleted tasks", async () => {
+    const { board, columns, task, agent } = await proBoard();
+    const unassigned = await repos.tasks.create(taskInput(board.id, columns[0].id, "Nobody's"));
+    await expect(repos.agentRuns.start(unassigned.id, agent.id, owner.id)).rejects.toThrow(/Assign the task/);
+
+    const stale = await repos.agentRuns.start(task.id, agent.id, owner.id);
+    await store.write((db) => {
+      db.agentRuns.find((r) => r.id === stale.id)!.createdAt = new Date(Date.now() - 11 * 60_000).toISOString();
+    });
+    await repos.agentRuns.start(task.id, agent.id, owner.id);
+    expect(await repos.agentRuns.get(stale.id)).toMatchObject({ status: "failed", error: "Timed out" });
+
+    await repos.tasks.delete(task.id);
+    expect(await repos.agentRuns.listForTask(task.id)).toEqual([]);
   });
 });
 

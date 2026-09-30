@@ -815,6 +815,84 @@ describe("AI teammates", () => {
     ).rejects.toThrow(/agents_require_pro/);
   });
 
+  it("creates tasks already assigned to an agent", async () => {
+    const created = await asUser(db, member, (tx) =>
+      one<{ assignee_agent_id: string }>(
+        tx,
+        "select * from create_task($1, $2, 'Agent task', '', 'none', null, '{}', null, null, 'c0', $3, $4)",
+        [t.board, t.column, member, agent],
+      ),
+    );
+    expect(created.assignee_agent_id).toBe(agent);
+    await expect(
+      asUser(db, member, (tx) =>
+        tx.query("select * from create_task($1, $2, 'X', '', 'none', null, '{}', null, null, 'c1', $3, $4)", [t.board, t.column, member, otherAgent]),
+      ),
+    ).rejects.toThrow(/assignee_not_member/);
+  });
+
+  it("only runs the agent a task is assigned to", async () => {
+    const task = await asUser(db, member, (tx) =>
+      one<{ id: string }>(tx, "select * from create_task($1, $2, 'Unassigned', '', 'none', null, '{}', null, null, 'c2')", [t.board, t.column]),
+    );
+    await expect(
+      asUser(db, member, (tx) => tx.query("select start_agent_run($1, $2)", [task.id, agent])),
+    ).rejects.toThrow(/agent_not_assigned/);
+  });
+
+  it("times out stale runs so the task can run again", async () => {
+    const task = await asUser(db, member, (tx) =>
+      one<{ id: string }>(tx, "select * from create_task($1, $2, 'Stale', '', 'none', null, '{}', null, null, 'c3', $3, $4)", [t.board, t.column, member, agent]),
+    );
+    const stale = await asUser(db, member, (tx) => one<{ id: string }>(tx, "select start_agent_run($1, $2) as id", [task.id, agent]));
+    await db.query("update agent_runs set created_at = now() - interval '11 minutes' where id = $1", [stale.id]);
+    await asUser(db, t.owner, (tx) => tx.query("select start_agent_run($1, $2)", [task.id, agent]));
+    expect(await one(db, "select status, error from agent_runs where id = $1", [stale.id])).toEqual({
+      status: "failed",
+      error: "Timed out",
+    });
+  });
+
+  it("caps a team's concurrent and daily runs", async () => {
+    const cap = await makeTeam(db, "capped");
+    const capAgent = await one<{ id: string }>(db, "insert into ai_agents (team_id, name) values ($1, 'Bot') returning id", [cap.team]);
+    const newTask = (n: number) =>
+      asUser(db, cap.owner, (tx) =>
+        one<{ id: string }>(tx, `select * from create_task($1, $2, 'T${n}', '', 'none', null, '{}', null, null, 'd${n}', $3, $4)`, [cap.board, cap.column, cap.owner, capAgent.id]),
+      );
+    for (let n = 0; n < 3; n++) {
+      const task = await newTask(n);
+      await asUser(db, cap.owner, (tx) => tx.query("select start_agent_run($1, $2)", [task.id, capAgent.id]));
+    }
+    const fourth = await newTask(3);
+    await expect(
+      asUser(db, cap.owner, (tx) => tx.query("select start_agent_run($1, $2)", [fourth.id, capAgent.id])),
+    ).rejects.toThrow(/agent_busy/);
+
+    await db.query("update agent_runs set status = 'succeeded' where team_id = $1", [cap.team]);
+    await db.query(
+      `insert into agent_runs (team_id, task_id, agent_id, status) select $1, $2, $3, 'succeeded' from generate_series(1, 47)`,
+      [cap.team, fourth.id, capAgent.id],
+    );
+    await expect(
+      asUser(db, cap.owner, (tx) => tx.query("select start_agent_run($1, $2)", [fourth.id, capAgent.id])),
+    ).rejects.toThrow(/agent_daily_limit/);
+  });
+
+  it("adds agents only on Pro, and a comment has one author", async () => {
+    const free = await makeTeam(db, "freeagents", "free");
+    await expect(
+      asUser(db, free.owner, (tx) =>
+        tx.query("insert into ai_agents (team_id, name, created_by) values ($1, 'Bot', $2)", [free.team, free.owner]),
+      ),
+    ).rejects.toThrow(/row-level security/);
+    await expect(
+      asUser(db, member, (tx) =>
+        tx.query("insert into comments (task_id, author_user_id, author_agent_id, body) values ($1, $2, $3, 'both')", [t.task.id, member, agent]),
+      ),
+    ).rejects.toThrow(/check constraint|row-level security/);
+  });
+
   it("never lets anyone write runs or agent comments directly", async () => {
     await expect(
       asUser(db, member, (tx) =>

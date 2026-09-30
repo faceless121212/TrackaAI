@@ -132,9 +132,10 @@ describe.skipIf(!url || !key)("Supabase repositories (live project)", () => {
     const [workspace] = await r.workspaces.listForTeam(teamId);
     const [board] = await r.boards.listForWorkspace(workspace.id);
     const [column] = await r.boards.listColumns(board.id);
-    const task = await r.tasks.create(taskInput(board.id, column.id, "Needs a spec"));
     const agent = await r.agents.create(teamId, { name: "Spec writer", specialty: "Specs", createdBy: demo.user.id });
-    await r.tasks.update(task.id, { assignee: { kind: "agent", agentId: agent.id } });
+    // Created already assigned (the create dialog's path).
+    const task = await r.tasks.create({ ...taskInput(board.id, column.id, "Needs a spec"), assignee: { kind: "agent", agentId: agent.id } });
+    expect(task.assignee).toEqual({ kind: "agent", agentId: agent.id });
 
     const run = await r.agentRuns.start(task.id, agent.id, demo.user.id);
     await expect(r.agentRuns.start(task.id, agent.id, demo.user.id)).rejects.toBeInstanceOf(ConflictError);

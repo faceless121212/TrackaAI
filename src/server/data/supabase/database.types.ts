@@ -85,6 +85,7 @@ export type Database = {
           p_parent: string | null;
           p_position: string;
           p_actor?: string;
+          p_assignee_agent?: string | null;
         };
         Returns: Database["public"]["Tables"]["tasks"]["Row"];
       };

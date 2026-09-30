@@ -18,7 +18,7 @@ import {
   isActiveRun,
   type AgentRun,
 } from "@/lib/domain";
-import { ConflictError, NotFoundError, PlanLimitError } from "../errors";
+import { AGENT_BUSY, AGENT_DAILY_LIMIT, AGENT_NOT_ASSIGNED, ConflictError, NotFoundError, PlanLimitError } from "../errors";
 import type { Repositories } from "../types";
 import type { MockDb } from "./db";
 import { hashPassword, verifyPassword } from "./password";
@@ -55,6 +55,7 @@ function taskPositions(db: MockDb, columnId: string, excludeId?: string): string
 function deleteTasks(db: MockDb, taskIds: Set<string>) {
   db.tasks = db.tasks.filter((t) => !taskIds.has(t.id));
   db.comments = db.comments.filter((c) => !taskIds.has(c.taskId));
+  db.agentRuns = db.agentRuns.filter((r) => !taskIds.has(r.taskId));
   for (const task of db.tasks) {
     if (task.parentId && taskIds.has(task.parentId)) task.parentId = null;
   }
@@ -546,7 +547,21 @@ export function createMockRepositories(store: MockStore, session: SessionStore =
           const agent = db.agents.find((a) => a.id === agentId && a.teamId === team.id);
           if (!agent) throw new NotFoundError("Agent", agentId);
           if (team.plan !== "pro") throw new ConflictError("plan", AGENTS_NEED_PRO);
-          if (db.agentRuns.some((r) => r.taskId === taskId && isActiveRun(r))) throw new ConflictError("agent", ALREADY_WORKING);
+          if (task.assignee?.kind !== "agent" || task.assignee.agentId !== agentId) {
+            throw new ConflictError("agent", AGENT_NOT_ASSIGNED);
+          }
+          // Same rules as start_agent_run: stale runs time out, then the caps apply.
+          const staleBefore = new Date(Date.now() - 10 * 60_000).toISOString();
+          for (const r of db.agentRuns) {
+            if (r.teamId === team.id && isActiveRun(r) && r.createdAt < staleBefore) {
+              Object.assign(r, { status: "failed", finishedAt: now(), error: "Timed out" });
+            }
+          }
+          const teamRuns = db.agentRuns.filter((r) => r.teamId === team.id);
+          if (teamRuns.some((r) => r.taskId === taskId && isActiveRun(r))) throw new ConflictError("agent", ALREADY_WORKING);
+          if (teamRuns.filter(isActiveRun).length >= 3) throw new ConflictError("agent", AGENT_BUSY);
+          const dayAgo = new Date(Date.now() - DAY_MS).toISOString();
+          if (teamRuns.filter((r) => r.createdAt > dayAgo).length >= 50) throw new ConflictError("agent", AGENT_DAILY_LIMIT);
           const run: AgentRun = {
             id: newId(),
             teamId: team.id,
@@ -573,7 +588,7 @@ export function createMockRepositories(store: MockStore, session: SessionStore =
       finish: (runId, userId, body) =>
         store.write((db) => {
           const run = db.agentRuns.find((r) => r.id === runId && r.requestedBy === userId && r.status === "running");
-          if (!run) throw new NotFoundError("Run", runId);
+          if (!run || !db.tasks.some((t) => t.id === run.taskId)) throw new NotFoundError("Run", runId);
           const comment: Comment = {
             id: newId(),
             taskId: run.taskId,

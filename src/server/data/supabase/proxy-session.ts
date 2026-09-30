@@ -1,6 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { supabaseConfig } from "@/lib/supabase/config";
+import { supabaseFetch } from "@/lib/supabase/debug-fetch";
 import type { Database } from "./database.types";
 
 /**
@@ -13,6 +14,7 @@ export async function refreshSupabaseSession(request: NextRequest) {
   const { url, key } = supabaseConfig();
   let response = NextResponse.next({ request });
   const supabase = createServerClient<Database>(url, key, {
+    global: { fetch: supabaseFetch("proxy", url) },
     cookies: {
       getAll: () => request.cookies.getAll(),
       // `headers` are no-store cache headers: a response that sets someone's
@@ -25,6 +27,8 @@ export async function refreshSupabaseSession(request: NextRequest) {
       },
     },
   });
-  const { data } = await supabase.auth.getUser();
-  return { response, userId: data.user?.id ?? null };
+  // getClaims verifies the JWT locally (ES256, keys cached per process) and
+  // refreshes an expired session first, so this costs no round trip.
+  const { data } = await supabase.auth.getClaims();
+  return { response, userId: data?.claims.sub ?? null };
 }

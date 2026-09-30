@@ -1,7 +1,8 @@
 -- AI teammates (M9): team-scoped agents that can be assigned tasks, and the
 -- runs that do the work. Runs change state only through the functions below,
--- each checked against the member who requested the run, so nobody can post
--- as an agent or mark work done directly.
+-- each checked against the member who requested the run: no one can drive
+-- someone else's run or write agent_runs directly. (The requester's own client
+-- could call finish_agent_run with its own text; see docs/build-plan.md M9.)
 
 create table public.ai_agents (
   id uuid primary key default gen_random_uuid(),

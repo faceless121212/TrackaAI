@@ -15484,11 +15484,22 @@ Gotchas:
 Shipped as planned. Verified live with `claude-sonnet-5` on a throwaway Pro team: the teammate posted a structured spec (summary, assumptions, goal, acceptance criteria) as a comment and moved the task to In Review. The team was deleted afterwards.
 
 Gotchas:
-1. The run executes in `after()` of the server action that assigned the task, with the requester's session. The database functions check `requested_by = auth.uid()` at every step, so the run can't be driven by anyone else, and nobody can post as an agent directly.
+1. The run executes in `after()` of the server action that assigned the task, as the requester. The database functions check `requested_by = auth.uid()` at every step, so no one can drive someone else's run.
+   - Known limitation: without a server-side worker key, the requester's own client could call `finish_agent_run` with its own text. That would put words under the teammate's name on a task assigned to it, in their own team, and it's recorded in `agent_runs`. A service-role worker would close this; M10 can add one.
 2. Assigning the same agent again doesn't start a new run (only a change of assignee does); **Run again** starts a fresh run explicitly. One active run per task is a unique partial index.
 3. The task sheet polls with `router.refresh()` every 3 s while a run is queued or running.
 4. Mock runs created in the same millisecond need a stable newest-first order (reverse, then sort).
-5. Known limitation: without a queue, a run is lost if the server stops mid-run; it stays "running". A queue or cron (M10+) should pick up stale runs.
+5. Without a queue, a run is lost if the server stops mid-run. It no longer blocks the task: runs older than 10 minutes time out when the next run starts, and the sheet stops polling after 10 minutes. A queue or cron (M10+) should retry them.
+6. (Pre-PR review) Fixes:
+   - Supabase's `create_task` ignored an agent assignee, so the create dialog lost it; `create_task` now takes `p_assignee_agent`.
+   - A run needs the task to be assigned to that agent.
+   - A team has at most 3 active runs and 50 a day (fair use on Pro).
+   - Adding agents needs Pro, also in RLS.
+   - A comment has at most one author.
+   - Background runs use a client that carries only the access token, so they can't rotate the session after the response.
+   - A finishing run re-reads the task: if it was reassigned it posts nothing, and if someone moved it the task stays where they put it.
+   - Agent comments render as untrusted Markdown (no images, `nofollow` links).
+   - A run that can't start after an assignment is a warning, not an error; reassigning during a run is refused up front.
 
 ## Next up: M10
 

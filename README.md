@@ -21,6 +21,12 @@ On Pro, the board's **Copilot** panel (`claude-sonnet-5`) answers questions abou
 
 Also on Pro, managers add **AI teammates** in **Settings → AI teammates** (a name and a specialty). Assign a task to one and it writes a first result (a spec, plan or draft) as a comment, then moves the task to **In Review**; the task sheet shows its runs and a **Run again** button. Runs happen in the background after the request (`after()`); a job queue can take over later.
 
+### Checking a live setup
+
+`pnpm test:smoke` goes through every main feature once, AI included, against a running server on the Supabase backend: sign-in, board, tasks, comments, the AI writer, breakdown, copilot and an AI teammate, settings and pricing. It signs in as the seeded demo account (or `SMOKE_EMAIL`/`SMOKE_PASSWORD`), needs its team on Pro, and deletes what it creates. Each run uses four AI runs from that team's monthly allowance. Never seed a public deployment with the demo account: its password is public. Start a production build first (`pnpm build && pnpm start`), then run `SMOKE_URL=http://localhost:3000 pnpm test:smoke`. Each step's time is printed.
+
+`DEBUG_SUPABASE=1` logs every Supabase request with its duration. Each line is a round trip, so a slow page shows up as a long list.
+
 ### Plans
 
 Teams start on **Free** (just you, 1 workspace); **Lite** allows 3 people and 10 workspaces; **Pro** is unlimited. Billing is simulated: the owner upgrades from **Settings → Billing** through a test checkout, and nothing is charged. Limits live in `src/lib/domain/plans.ts` and are enforced by the server actions and by the database. The seeded demo team is on Pro.

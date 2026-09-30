@@ -14,10 +14,10 @@ export default async function MyTasksPage({ params }: PageProps<"/[team]">) {
   const [tasks, labels, workspaces] = await Promise.all([
     repos.tasks.listAssignedTo(team.id, user.id),
     repos.labels.listForTeam(team.id),
-    repos.workspaces.listForTeam(team.id),
+    repos.workspaces.listWithBoards(team.id),
   ]);
-  const boards = (await Promise.all(workspaces.map((w) => repos.boards.listForWorkspace(w.id)))).flat();
-  const columns = (await Promise.all(boards.map((b) => repos.boards.listColumns(b.id)))).flat();
+  const boards = workspaces.flatMap((w) => w.boards);
+  const columns = await repos.boards.listColumnsForBoards([...new Set(tasks.map((t) => t.boardId))]);
   const boardName = new Map(boards.map((b) => [b.id, b.name]));
   const columnName = new Map(columns.map((c) => [c.id, c.name]));
 

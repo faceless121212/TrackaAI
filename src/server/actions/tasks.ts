@@ -64,7 +64,8 @@ export async function updateTaskAction(taskId: string, patch: UpdateTaskInput): 
     const { user, team, membership, task } = await requireTaskAccess(taskId);
     assertCan(membership.role, "task:update");
     const parsed = updateTaskInputSchema.parse(patch);
-    await assertTaskRefs(team.id, parsed);
+    // Only assignee and label changes point at other rows.
+    if (parsed.assignee !== undefined || parsed.labelIds !== undefined) await assertTaskRefs(team.id, parsed);
     const repos = getRepositories();
     const next = parsed.assignee;
     const changesAssignee =

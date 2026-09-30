@@ -36,6 +36,23 @@ import type {
 
 export type TeamMember = Membership & { user: User };
 
+// What a guard needs to authorize a request, fetched in one lookup: the entity,
+// its parents up to the team, and the user's membership. null when the entity
+// doesn't exist or the user isn't a member of its team.
+export type TeamAccess = { team: Team; membership: Membership };
+export type WorkspaceAccess = TeamAccess & { workspace: Workspace };
+export type BoardAccess = WorkspaceAccess & { board: Board };
+export type ColumnAccess = BoardAccess & { column: Column };
+export type TaskAccess = BoardAccess & { task: Task };
+
+export interface AccessRepo {
+  team(slug: string, userId: string): Promise<TeamAccess | null>;
+  workspace(id: string, userId: string): Promise<WorkspaceAccess | null>;
+  board(id: string, userId: string): Promise<BoardAccess | null>;
+  column(id: string, userId: string): Promise<ColumnAccess | null>;
+  task(id: string, userId: string): Promise<TaskAccess | null>;
+}
+
 /** What counts toward plan limits. Pending invites hold a seat until they expire. */
 export type TeamUsage = { members: number; pendingInvites: number; workspaces: number };
 
@@ -101,6 +118,8 @@ export interface MembershipsRepo {
 
 export interface WorkspacesRepo {
   create(input: CreateWorkspaceInput): Promise<Workspace>;
+  /** The team's workspaces with their boards (for the sidebar), oldest first. */
+  listWithBoards(teamId: string): Promise<(Workspace & { boards: Board[] })[]>;
   get(id: string): Promise<Workspace | null>;
   listForTeam(teamId: string): Promise<Workspace[]>;
   update(id: string, patch: UpdateWorkspaceInput): Promise<Workspace>;
@@ -117,6 +136,8 @@ export interface BoardsRepo {
   /** Deletes the board with its columns, tasks and comments. */
   delete(id: string): Promise<void>;
   listColumns(boardId: string): Promise<Column[]>;
+  /** Columns of several boards at once, in board order then position. */
+  listColumnsForBoards(boardIds: string[]): Promise<Column[]>;
   getColumn(id: string): Promise<Column | null>;
   /** Appends a column at the end of the board. */
   createColumn(boardId: string, name: string): Promise<Column>;
@@ -240,4 +261,5 @@ export interface Repositories {
   aiUsage: AiUsageRepo;
   agents: AgentsRepo;
   agentRuns: AgentRunsRepo;
+  access: AccessRepo;
 }

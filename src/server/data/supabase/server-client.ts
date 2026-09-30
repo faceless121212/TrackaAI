@@ -2,6 +2,7 @@ import "server-only";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { supabaseConfig } from "@/lib/supabase/config";
+import { supabaseFetch } from "@/lib/supabase/debug-fetch";
 import type { Database } from "./database.types";
 
 /**
@@ -12,6 +13,7 @@ export async function createSupabaseServerClient() {
   const { url, key } = supabaseConfig();
   const store = await cookies();
   return createServerClient<Database>(url, key, {
+    global: { fetch: supabaseFetch("server", url) },
     cookies: {
       getAll: () => store.getAll(),
       setAll: (items) => {

@@ -89,6 +89,31 @@ const toLabel = (r: Row<"labels">): Label => ({
   color: r.color as Label["color"],
 });
 
+// Embedded selects (PostgREST follows the foreign keys): one round trip
+// instead of one per table. The hand-written Database type doesn't describe
+// relationships, so their results are cast to these shapes.
+const TASK_WITH_LABELS = "*, task_labels(label_id)";
+type TaskWithLabels = Row<"tasks"> & { task_labels: { label_id: string }[] };
+const fromTaskWithLabels = (r: TaskWithLabels): Task =>
+  toTask(r, (r.task_labels ?? []).map((l) => l.label_id));
+
+// The path from a board up to the caller's membership, filtered to that user.
+const BOARD_PATH = "workspaces!inner(*, teams!inner(*, memberships!inner(*)))";
+type WorkspacePath = Row<"workspaces"> & { teams: Row<"teams"> & { memberships: Row<"memberships">[] } };
+type BoardPath = Row<"boards"> & { workspaces: WorkspacePath };
+
+// The query already filters memberships to `userId`; checking again means a
+// broken filter can never hand back someone else's role.
+function fromWorkspacePath(w: WorkspacePath, userId: string) {
+  const membership = w.teams.memberships.find((m) => m.user_id === userId);
+  return membership ? { team: toTeam(w.teams), membership: toMembership(membership), workspace: toWorkspace(w) } : null;
+}
+
+function fromBoardPath(b: BoardPath, userId: string) {
+  const access = fromWorkspacePath(b.workspaces, userId);
+  return access ? { ...access, board: toBoard(b) } : null;
+}
+
 type AgentRow = Database["public"]["Tables"]["ai_agents"]["Row"];
 type AgentRunRow = Database["public"]["Tables"]["agent_runs"]["Row"];
 
@@ -266,25 +291,16 @@ export function createSupabaseRepositories(client: () => Promise<Client>): Repos
     return rows.map((r) => toTask(r, labels.get(r.id) ?? []));
   }
 
+  /** Reads tasks with their label ids in the same request. */
+  async function selectTasks(query: (select: string) => PromiseLike<Result<unknown>>): Promise<Task[]> {
+    const rows = data(await query(TASK_WITH_LABELS)) as TaskWithLabels[] | TaskWithLabels;
+    return (Array.isArray(rows) ? rows : [rows]).map(fromTaskWithLabels);
+  }
+
   async function columnTaskPositions(db: Client, columnId: string, excludeId?: string): Promise<string[]> {
     let query = db.from("tasks").select("id, position").eq("column_id", columnId).order("position");
     if (excludeId) query = query.neq("id", excludeId);
     return data(await query).map((r) => r.position);
-  }
-
-  async function boardIdsForTeam(db: Client, teamId: string): Promise<string[]> {
-    const workspaces = data(await db.from("workspaces").select("id").eq("team_id", teamId));
-    if (workspaces.length === 0) return [];
-    const boards = data(
-      await db
-        .from("boards")
-        .select("id")
-        .in(
-          "workspace_id",
-          workspaces.map((w) => w.id),
-        ),
-    );
-    return boards.map((b) => b.id);
   }
 
   async function getProfile(db: Client, id: string): Promise<User | null> {
@@ -337,8 +353,9 @@ export function createSupabaseRepositories(client: () => Promise<Client>): Repos
 
       async currentUserId() {
         const db = await client();
-        const { data: result } = await db.auth.getUser();
-        return result.user?.id ?? null;
+        // Verified locally against the project's signing keys: no round trip.
+        const { data: result } = await db.auth.getClaims();
+        return result?.claims.sub ?? null;
       },
 
       async confirmEmail({ code, tokenHash, type }) {
@@ -393,18 +410,9 @@ export function createSupabaseRepositories(client: () => Promise<Client>): Repos
       },
       async listForUser(userId) {
         const db = await client();
-        const memberships = data(await db.from("memberships").select("team_id").eq("user_id", userId));
-        if (memberships.length === 0) return [];
         const rows = data(
-          await db
-            .from("teams")
-            .select("*")
-            .in(
-              "id",
-              memberships.map((m) => m.team_id),
-            )
-            .order("name"),
-        );
+          await db.from("teams").select("*, memberships!inner(user_id)").eq("memberships.user_id", userId).order("name"),
+        ) as unknown as Row<"teams">[];
         return rows.map(toTeam);
       },
       async update(id, patch) {
@@ -440,23 +448,11 @@ export function createSupabaseRepositories(client: () => Promise<Client>): Repos
       },
       async listMembers(teamId) {
         const db = await client();
-        const memberships = data(await db.from("memberships").select("*").eq("team_id", teamId));
-        if (memberships.length === 0) return [];
-        const profiles = data(
-          await db
-            .from("profiles")
-            .select("*")
-            .in(
-              "id",
-              memberships.map((m) => m.user_id),
-            ),
-        );
-        const byId = new Map(profiles.map((p) => [p.id, toUser(p)]));
-        return memberships
-          .flatMap((m) => {
-            const user = byId.get(m.user_id);
-            return user ? [{ ...toMembership(m), user }] : [];
-          })
+        const rows = data(await db.from("memberships").select("*, profiles(*)").eq("team_id", teamId)) as unknown as (Row<"memberships"> & {
+          profiles: Row<"profiles"> | null;
+        })[];
+        return rows
+          .flatMap((m) => (m.profiles ? [{ ...toMembership(m), user: toUser(m.profiles) }] : []))
           .sort((a, b) => a.user.name.localeCompare(b.user.name));
       },
       async setRole(teamId, userId, role) {
@@ -494,6 +490,18 @@ export function createSupabaseRepositories(client: () => Promise<Client>): Repos
         const db = await client();
         const row = maybe(await db.from("workspaces").select("*").eq("id", id).maybeSingle());
         return row ? toWorkspace(row) : null;
+      },
+      async listWithBoards(teamId) {
+        const db = await client();
+        const rows = data(
+          await db
+            .from("workspaces")
+            .select("*, boards(*)")
+            .eq("team_id", teamId)
+            .order("created_at")
+            .order("created_at", { referencedTable: "boards" }),
+        ) as unknown as (Row<"workspaces"> & { boards: Row<"boards">[] })[];
+        return rows.map((w) => ({ ...toWorkspace(w), boards: w.boards.map(toBoard) }));
       },
       async listForTeam(teamId) {
         const db = await client();
@@ -552,6 +560,12 @@ export function createSupabaseRepositories(client: () => Promise<Client>): Repos
       async delete(id) {
         const db = await client();
         check(await db.from("boards").delete().eq("id", id));
+      },
+      async listColumnsForBoards(boardIds) {
+        if (boardIds.length === 0) return [];
+        const db = await client();
+        const rows = data(await db.from("columns").select("*").in("board_id", boardIds).order("position")).map(toColumn);
+        return rows.sort((a, b) => boardIds.indexOf(a.boardId) - boardIds.indexOf(b.boardId));
       },
       async listColumns(boardId) {
         const db = await client();
@@ -626,8 +640,8 @@ export function createSupabaseRepositories(client: () => Promise<Client>): Repos
       },
       async get(id) {
         const db = await client();
-        const row = maybe(await db.from("tasks").select("*").eq("id", id).maybeSingle());
-        return row ? (await withLabels(db, [row]))[0] : null;
+        const row = maybe(await db.from("tasks").select(TASK_WITH_LABELS).eq("id", id).maybeSingle()) as TaskWithLabels | null;
+        return row ? fromTaskWithLabels(row) : null;
       },
       async getByKey(workspaceId, key) {
         const db = await client();
@@ -648,21 +662,18 @@ export function createSupabaseRepositories(client: () => Promise<Client>): Repos
       },
       async listForBoard(boardId) {
         const db = await client();
-        return withLabels(db, data(await db.from("tasks").select("*").eq("board_id", boardId).order("position")));
+        return selectTasks((select) => db.from("tasks").select(select).eq("board_id", boardId).order("position"));
       },
       async listAssignedTo(teamId, userId) {
         const db = await client();
-        const boardIds = await boardIdsForTeam(db, teamId);
-        if (boardIds.length === 0) return [];
-        const rows = data(
-          await db
+        return selectTasks((select) =>
+          db
             .from("tasks")
-            .select("*")
-            .in("board_id", boardIds)
+            .select(`${select}, boards!inner(workspaces!inner(team_id))`)
+            .eq("boards.workspaces.team_id", teamId)
             .eq("assignee_user_id", userId)
             .order("updated_at", { ascending: false }),
         );
-        return withLabels(db, rows);
       },
       async update(id, patch: UpdateTaskInput) {
         const db = await client();
@@ -677,27 +688,28 @@ export function createSupabaseRepositories(client: () => Promise<Client>): Repos
           changes.assignee_agent_id = patch.assignee?.kind === "agent" ? patch.assignee.agentId : null;
         }
         // Always write the row (even for label-only edits) so updated_at moves and RLS is checked.
-        const row = data(await db.from("tasks").update(changes).eq("id", id).select("*").single());
-        if (patch.labelIds !== undefined) {
-          check(await db.from("task_labels").delete().eq("task_id", id));
-          if (patch.labelIds.length > 0) {
-            check(await db.from("task_labels").insert(patch.labelIds.map((labelId) => ({ task_id: id, label_id: labelId }))));
-          }
+        const [updated] = await selectTasks((select) => db.from("tasks").update(changes).eq("id", id).select(select).single());
+        if (patch.labelIds === undefined) return updated;
+        check(await db.from("task_labels").delete().eq("task_id", id));
+        if (patch.labelIds.length > 0) {
+          check(await db.from("task_labels").insert(patch.labelIds.map((labelId) => ({ task_id: id, label_id: labelId }))));
         }
-        return (await withLabels(db, [row]))[0];
+        return { ...updated, labelIds: patch.labelIds };
       },
       async move(id, { columnId, index }) {
         const db = await client();
-        const task = data(await db.from("tasks").select("board_id").eq("id", id).single());
-        const column = maybe(
-          await db.from("columns").select("id").eq("id", columnId).eq("board_id", task.board_id).maybeSingle(),
+        // The three reads don't depend on each other, so they run at once.
+        const [task, column, positions] = await Promise.all([
+          db.from("tasks").select("board_id").eq("id", id).single().then(data),
+          db.from("columns").select("board_id").eq("id", columnId).maybeSingle().then(maybe),
+          columnTaskPositions(db, columnId, id),
+        ]);
+        if (!column || column.board_id !== task.board_id) throw new NotFoundError("Column", columnId);
+        const position = positionAt(positions, index);
+        const [moved] = await selectTasks((select) =>
+          db.from("tasks").update({ column_id: columnId, position }).eq("id", id).select(select).single(),
         );
-        if (!column) throw new NotFoundError("Column", columnId);
-        const position = positionAt(await columnTaskPositions(db, columnId, id), index);
-        const row = data(
-          await db.from("tasks").update({ column_id: columnId, position }).eq("id", id).select("*").single(),
-        );
-        return (await withLabels(db, [row]))[0];
+        return moved;
       },
       async delete(id) {
         const db = await client();
@@ -952,6 +964,67 @@ export function createSupabaseRepositories(client: () => Promise<Client>): Repos
         return data(
           await db.from("agent_runs").select("*").eq("task_id", taskId).order("created_at", { ascending: false }),
         ).map(toAgentRun);
+      },
+    },
+
+    access: {
+      async team(slug, userId) {
+        const db = await client();
+        const row = maybe(
+          await db.from("teams").select("*, memberships!inner(*)").eq("slug", slug).eq("memberships.user_id", userId).maybeSingle(),
+        ) as unknown as (Row<"teams"> & { memberships: Row<"memberships">[] }) | null;
+        const membership = row?.memberships.find((m) => m.user_id === userId);
+        return row && membership ? { team: toTeam(row), membership: toMembership(membership) } : null;
+      },
+      async workspace(id, userId) {
+        const db = await client();
+        const row = maybe(
+          await db
+            .from("workspaces")
+            .select("*, teams!inner(*, memberships!inner(*))")
+            .eq("id", id)
+            .eq("teams.memberships.user_id", userId)
+            .maybeSingle(),
+        ) as unknown as WorkspacePath | null;
+        return row ? fromWorkspacePath(row, userId) : null;
+      },
+      async board(id, userId) {
+        const db = await client();
+        const row = maybe(
+          await db
+            .from("boards")
+            .select(`*, ${BOARD_PATH}`)
+            .eq("id", id)
+            .eq("workspaces.teams.memberships.user_id", userId)
+            .maybeSingle(),
+        ) as unknown as BoardPath | null;
+        return row ? fromBoardPath(row, userId) : null;
+      },
+      async column(id, userId) {
+        const db = await client();
+        const row = maybe(
+          await db
+            .from("columns")
+            .select(`*, boards!inner(*, ${BOARD_PATH})`)
+            .eq("id", id)
+            .eq("boards.workspaces.teams.memberships.user_id", userId)
+            .maybeSingle(),
+        ) as unknown as (Row<"columns"> & { boards: BoardPath }) | null;
+        const access = row && fromBoardPath(row.boards, userId);
+        return access ? { ...access, column: toColumn(row) } : null;
+      },
+      async task(id, userId) {
+        const db = await client();
+        const row = maybe(
+          await db
+            .from("tasks")
+            .select(`${TASK_WITH_LABELS}, boards!inner(*, ${BOARD_PATH})`)
+            .eq("id", id)
+            .eq("boards.workspaces.teams.memberships.user_id", userId)
+            .maybeSingle(),
+        ) as unknown as (TaskWithLabels & { boards: BoardPath }) | null;
+        const access = row && fromBoardPath(row.boards, userId);
+        return access ? { ...access, task: fromTaskWithLabels(row) } : null;
       },
     },
   };

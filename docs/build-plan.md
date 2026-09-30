@@ -18,7 +18,7 @@ This file holds the detailed, task-level plan for the **current** milestone. Eac
 | M7 — AI I: task writer & breakdown | ✅ Done |
 | M8 — AI II: board copilot | ✅ Done |
 | M9 — AI III: AI teammate | ✅ Done |
-| M10 — Hardening & launch | 🚧 In progress (speed pass done) |
+| M10 — Hardening & launch | 🚧 In progress (speed pass; errors, a11y and rate limits done) |
 
 ---
 
@@ -15546,10 +15546,10 @@ Changes:
 - **Rate limit:**
   - `start_ai_run` refuses a user's 21st interactive AI run in a rolling minute, even on Pro (no monthly cap there), and the route answers 429 with `Retry-After`.
   - AI teammate runs are exempt (they have their own caps).
-  - The limit is in the database with the reservation, so it holds across server instances. Only AI spends money on the server's behalf; other writes are RLS-bound and cheap.
+  - The limit is in the database with the reservation, so it holds across server instances. A per-user advisory lock (taken after the team row lock, always in that order) stops someone in several teams from slipping past it with parallel calls to different teams. Only AI spends money on the server's behalf; other writes are RLS-bound and cheap.
 
 Gotchas:
-- **`instanceof` across bundles:** the repositories are cached on `globalThis`, but a production build gives route handlers and pages separate copies of `errors.ts`. A `RateLimitError` thrown by repositories first built by a page failed `instanceof` in the AI route (500 instead of 429), and the same could hit `ConflictError`/`PlanLimitError`. The errors now carry their kinds under `Symbol.for(...)`, and `Symbol.hasInstance` checks that. `errors.test.ts` loads two copies of the module to cover it.
+- **`instanceof` across bundles:** the repositories are cached on `globalThis`, but a production build gives route handlers and pages separate copies of `errors.ts`. A `RateLimitError` thrown by repositories first built by a page failed `instanceof` in the AI route (500 instead of 429), and the same could hit `ConflictError`/`PlanLimitError`. The errors now carry their kinds under `Symbol.for(...)`, and `Symbol.hasInstance` checks that. Each class declares its own static `kind`, not its name, because bundlers mangle class names; a subclass without one matches nothing. `errors.test.ts` loads two copies of the module to cover it.
 - dnd-kit's keyboard sensor starts listening for arrow keys a tick after the pick-up, so the e2e test pauses briefly between keys.
 
 Next in M10: a background worker (service role) for AI teammate runs, and deploying to Vercel with production settings. Both need secrets or accounts only the owner can set up.

@@ -204,3 +204,19 @@ test("a missing board shows a not-found page inside the app, with the sidebar", 
   await expect(page.getByRole("heading", { name: "Not found" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Engineering", exact: true })).toBeVisible();
 });
+
+test("managers reorder columns from the keyboard with the column grip", async ({ page }) => {
+  await openFreshBoard(page);
+  const pause = () => page.waitForTimeout(150); // see the card keyboard test
+  await page.getByRole("button", { name: "Reorder Backlog" }).focus();
+  await page.keyboard.press("Space");
+  await pause();
+  await page.keyboard.press("ArrowRight");
+  await pause();
+  await page.keyboard.press("Space");
+  await saved(page);
+  const names = () => page.locator('[data-slot="board"] section[aria-label]').evaluateAll((els) => els.map((e) => e.getAttribute("aria-label")));
+  await expect.poll(names).toEqual(["Todo", "Backlog", "In Progress", "In Review", "Done"]);
+  await page.reload();
+  await expect.poll(names).toEqual(["Todo", "Backlog", "In Progress", "In Review", "Done"]);
+});

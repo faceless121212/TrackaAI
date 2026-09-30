@@ -16,7 +16,6 @@ import {
   SortableContext,
   arrayMove,
   horizontalListSortingStrategy,
-  sortableKeyboardCoordinates,
 } from "@dnd-kit/sortable";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useOptimistic, useState, useTransition } from "react";
@@ -46,6 +45,7 @@ import {
   updateTaskAction,
 } from "@/server/actions/tasks";
 import { AddColumn, BoardColumn } from "./board-column";
+import { boardKeyboardCoordinates } from "./board-keyboard";
 import { BoardHeader } from "./board-header";
 import { columnReducer, groupTasks, planTaskMove, taskReducer } from "./board-state";
 import { BoardToolbar } from "./board-toolbar";
@@ -168,7 +168,11 @@ export function BoardView(props: BoardViewProps) {
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+    // Space picks up and drops; Enter is left to open a card's link.
+    useSensor(KeyboardSensor, {
+      coordinateGetter: boardKeyboardCoordinates(() => columns.map((column) => column.id)),
+      keyboardCodes: { start: ["Space"], cancel: ["Escape"], end: ["Space", "Enter"] },
+    }),
   );
 
   const containerOf = (id: string, source: Record<string, string[]>) =>
@@ -374,6 +378,12 @@ export function BoardView(props: BoardViewProps) {
                 }
               />
             ))}
+            {columns.length === 0 && (
+              <p className="text-muted-foreground w-[300px] shrink-0 pt-2 text-sm">
+                This board has no columns yet.{" "}
+                {canManage ? "Add one to start adding tasks." : "Ask a team admin to add one."}
+              </p>
+            )}
             {canManage && <AddColumn onAdd={addColumn} />}
           </div>
         </SortableContext>

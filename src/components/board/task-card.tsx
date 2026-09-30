@@ -17,7 +17,17 @@ type CardProps = {
   assignee: (Pick<MemberOption, "name" | "avatarUrl"> & { agent?: boolean }) | undefined;
 };
 
-export function TaskCardView({ task, href, labels, assignee, className }: CardProps & { className?: string }) {
+/** Makes the card's link the keyboard drag handle (Space picks it up, Enter still opens). */
+type DragHandle = { ref: (node: HTMLElement | null) => void; "aria-describedby"?: string };
+
+export function TaskCardView({
+  task,
+  href,
+  labels,
+  assignee,
+  className,
+  dragHandle,
+}: CardProps & { className?: string; dragHandle?: DragHandle }) {
   const hasProperties = task.priority !== "none" || labels.length > 0 || task.dueDate;
   return (
     // Linear's card: id + avatar, title, then a row of property chips.
@@ -38,6 +48,7 @@ export function TaskCardView({ task, href, labels, assignee, className }: CardPr
       </div>
       {/* Stretched link: the whole card opens the task; drags start from the card. */}
       <Link
+        {...dragHandle}
         href={href}
         scroll={false}
         draggable={false}
@@ -77,7 +88,7 @@ function formatDue(isoDate: string) {
 }
 
 export function SortableTaskCard(props: CardProps) {
-  const { setNodeRef, attributes, listeners, transform, transition, isDragging } = useSortable({
+  const { setNodeRef, setActivatorNodeRef, attributes, listeners, transform, transition, isDragging } = useSortable({
     id: props.task.id,
     data: { type: "task" },
     // Optimistic quick-add drafts have no server id yet.
@@ -85,14 +96,19 @@ export function SortableTaskCard(props: CardProps) {
   });
 
   return (
+    // Pointer drags start anywhere on the card; the keyboard drags from the link
+    // (its key presses bubble here). The wrapper itself isn't a control, so the
+    // link isn't nested inside a button.
     <div
       ref={setNodeRef}
       style={{ transform: CSS.Translate.toString(transform), transition }}
       className={cn("touch-none", isDragging && "opacity-40")}
-      {...attributes}
       {...listeners}
     >
-      <TaskCardView {...props} />
+      <TaskCardView
+        {...props}
+        dragHandle={{ ref: setActivatorNodeRef, "aria-describedby": attributes["aria-describedby"] }}
+      />
     </div>
   );
 }

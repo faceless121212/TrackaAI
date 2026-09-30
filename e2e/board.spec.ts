@@ -168,3 +168,39 @@ test("workspaces and boards are managed from the sidebar", async ({ page }) => {
   await page.getByRole("button", { name: "Save" }).click();
   await expect(page.getByRole("button", { name: "Workspace actions for Product design" })).toBeAttached();
 });
+
+test("cards work from the keyboard: Enter opens one, Space picks it up and moves it", async ({ page }) => {
+  await openFreshBoard(page);
+  await quickAdd(page, "Todo", "Keyboard card");
+  await saved(page);
+  const card = page.getByRole("link", { name: "Keyboard card" });
+
+  await card.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("dialog", { name: "Keyboard card" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page).not.toHaveURL(/task=/);
+
+  // dnd-kit starts listening for arrow keys a tick after the pick-up; people are never that fast.
+  const pause = () => page.waitForTimeout(150);
+  await card.focus();
+  await page.keyboard.press("Space");
+  await pause();
+  for (const key of ["ArrowRight", "ArrowRight", "ArrowLeft"]) {
+    await page.keyboard.press(key);
+    await pause();
+  }
+  await page.keyboard.press("Space");
+  await expect(column(page, "In Progress")).toContainText("Keyboard card");
+  await saved(page);
+  await page.reload();
+  await expect(column(page, "In Progress")).toContainText("Keyboard card");
+});
+
+test("a missing board shows a not-found page inside the app, with the sidebar", async ({ page }) => {
+  await openFreshBoard(page);
+  const url = page.url().replace(/\/board\/.+$/, "/board/00000000-0000-4000-8000-000000000000");
+  await page.goto(url);
+  await expect(page.getByRole("heading", { name: "Not found" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Engineering", exact: true })).toBeVisible();
+});

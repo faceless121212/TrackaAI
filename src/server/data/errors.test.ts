@@ -29,4 +29,11 @@ describe("repository errors", () => {
     expect(new Error("x")).not.toBeInstanceOf(NotFoundError);
     expect(null).not.toBeInstanceOf(NotFoundError);
   });
+
+  it("never lets a subclass without its own kind match its parent's errors", async () => {
+    const { ConflictError } = await freshCopy();
+    class Unkinded extends ConflictError {}
+    expect(new ConflictError("slug", "Taken")).not.toBeInstanceOf(Unkinded);
+    expect(new Unkinded("slug", "Taken")).toBeInstanceOf(ConflictError);
+  });
 });

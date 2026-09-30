@@ -54,7 +54,7 @@ test("owners change roles and remove members", async ({ page, browser, baseURL }
   await expect(page.getByText("Removed Mate")).toBeVisible();
   await expect(page.getByRole("listitem", { name: "Mate" })).toHaveCount(0);
   await mate.reload();
-  await expect(mate.getByText("This page could not be found.")).toBeVisible();
+  await expect(mate.getByRole("heading", { name: "Page not found" })).toBeVisible();
   await context.close();
 });
 

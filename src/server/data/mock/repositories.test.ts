@@ -202,6 +202,40 @@ describe("AI teammates", () => {
   });
 });
 
+describe("access", () => {
+  it("resolves an entity up to the team and the caller's membership, or null", async () => {
+    const { team, workspace, board, columns } = await setupBoard();
+    const task = await repos.tasks.create(taskInput(board.id, columns[0].id, "T"));
+    const { user: stranger } = await repos.auth.signUp({ name: "S", email: "s@example.test", password: "password1" });
+
+    expect(await repos.access.team("acme", owner.id)).toMatchObject({ team: { id: team.id }, membership: { role: "owner" } });
+    expect(await repos.access.workspace(workspace.id, owner.id)).toMatchObject({ workspace: { id: workspace.id } });
+    expect(await repos.access.board(board.id, owner.id)).toMatchObject({ board: { id: board.id }, team: { id: team.id } });
+    expect(await repos.access.column(columns[0].id, owner.id)).toMatchObject({ column: { id: columns[0].id } });
+    expect(await repos.access.task(task.id, owner.id)).toMatchObject({ task: { id: task.id }, board: { id: board.id } });
+
+    expect(await repos.access.team("acme", stranger.id)).toBeNull();
+    expect(await repos.access.task(task.id, stranger.id)).toBeNull();
+    expect(await repos.access.board("nope", owner.id)).toBeNull();
+  });
+
+  it("lists columns of several boards at once", async () => {
+    const { workspace, board, columns } = await setupBoard();
+    const other = await repos.boards.create({ workspaceId: workspace.id, name: "Other", description: null });
+    const all = await repos.boards.listColumnsForBoards([other.id, board.id]);
+    expect(all.slice(-columns.length)).toEqual(columns);
+    expect(all[0].boardId).toBe(other.id);
+    expect(await repos.boards.listColumnsForBoards([])).toEqual([]);
+  });
+
+  it("lists workspaces with their boards", async () => {
+    const { team, workspace, board } = await setupBoard();
+    expect(await repos.workspaces.listWithBoards(team.id)).toEqual([
+      { ...workspace, boards: [expect.objectContaining({ id: board.id })] },
+    ]);
+  });
+});
+
 describe("memberships", () => {
   it("changes roles and removes members", async () => {
     const { team } = await setupBoard();

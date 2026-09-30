@@ -5,6 +5,7 @@ import type { CopilotAccess } from "@/components/board/copilot-panel";
 import { PLAN_CATALOG, type Role, type Team } from "@/lib/domain";
 import { settingsPath } from "@/lib/paths";
 import { requireTeamMember } from "@/server/auth/guards";
+import { requireUserId } from "@/server/auth/session";
 import { can } from "@/server/auth/permissions";
 import { aiAvailable } from "@/server/ai/model";
 import { supabaseConfig } from "@/lib/supabase/config";
@@ -18,25 +19,29 @@ export const maxDuration = 120;
 
 export default async function BoardPage({ params, searchParams }: PageProps<"/[team]/board/[boardId]">) {
   const [{ team: teamSlug, boardId }, { task: taskKey }] = await Promise.all([params, searchParams]);
-  const { user, team, membership } = await requireTeamMember(teamSlug);
+  const userId = await requireUserId();
   const repos = getRepositories();
-  const board = await repos.boards.get(boardId);
-  const workspace = board ? await repos.workspaces.get(board.workspaceId) : null;
-  if (!board || !workspace || workspace.teamId !== team.id) notFound();
-
-  const [columns, tasks, members, labels, agents] = await Promise.all([
-    repos.boards.listColumns(board.id),
-    repos.tasks.listForBoard(board.id),
-    repos.memberships.listMembers(team.id),
-    repos.labels.listForTeam(team.id),
-    repos.agents.listForTeam(team.id),
+  // Two rounds of parallel reads. RLS limits everything to the caller's teams;
+  // the access check ties the board in the URL to this team.
+  const [{ user, team, membership }, access, columns, tasks] = await Promise.all([
+    requireTeamMember(teamSlug),
+    repos.access.board(boardId, userId),
+    repos.boards.listColumns(boardId),
+    repos.tasks.listForBoard(boardId),
   ]);
+  if (!access || access.team.id !== team.id) notFound();
+  const { board, workspace } = access;
+
   // ?task=ENG-12 opens the task sheet (PRD §5.3).
   const openTask =
     typeof taskKey === "string" ? (tasks.find((task) => task.key === taskKey.toUpperCase()) ?? null) : null;
-  const [comments, agentRuns] = openTask
-    ? await Promise.all([repos.comments.listForTask(openTask.id), repos.agentRuns.listForTask(openTask.id)])
-    : [[], []];
+  const [members, labels, agents, comments, agentRuns] = await Promise.all([
+    repos.memberships.listMembers(team.id),
+    repos.labels.listForTeam(team.id),
+    repos.agents.listForTeam(team.id),
+    openTask ? repos.comments.listForTask(openTask.id) : [],
+    openTask ? repos.agentRuns.listForTask(openTask.id) : [],
+  ]);
 
   return (
     <BoardView

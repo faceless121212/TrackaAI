@@ -9,16 +9,7 @@ import { getRepositories } from "@/server/data";
 export default async function TeamLayout({ children, params }: LayoutProps<"/[team]">) {
   const { user, team, membership } = await requireTeamMember((await params).team);
   const repos = getRepositories();
-  const [teams, workspaces] = await Promise.all([
-    repos.teams.listForUser(user.id),
-    repos.workspaces.listForTeam(team.id),
-  ]);
-  const tree = await Promise.all(
-    workspaces.map(async (workspace) => ({
-      ...workspace,
-      boards: await repos.boards.listForWorkspace(workspace.id),
-    })),
-  );
+  const [teams, tree] = await Promise.all([repos.teams.listForUser(user.id), repos.workspaces.listWithBoards(team.id)]);
   const boards = tree.flatMap((workspace) => workspace.boards.map(({ id, name }) => ({ id, name })));
 
   return (

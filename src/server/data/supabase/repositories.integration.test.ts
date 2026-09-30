@@ -146,6 +146,27 @@ describe.skipIf(!url || !key)("Supabase repositories (live project)", () => {
     expect(await mate.repos.agents.listForTeam(teamId)).toEqual([]); // not a member (yet)
   });
 
+  it("resolves access in one lookup, and only for members", async () => {
+    const r = demo.repos;
+    const [workspace] = await r.workspaces.listForTeam(teamId);
+    const [board] = await r.boards.listForWorkspace(workspace.id);
+    const [column] = await r.boards.listColumns(board.id);
+    const [bug] = await r.labels.listForTeam(teamId);
+    const task = await r.tasks.create({ ...taskInput(board.id, column.id, "Access check"), labelIds: [bug.id] });
+
+    expect(await r.access.team(slug, demo.user.id)).toMatchObject({ team: { id: teamId }, membership: { role: "owner" } });
+    expect(await r.access.workspace(workspace.id, demo.user.id)).toMatchObject({ workspace: { id: workspace.id } });
+    expect(await r.access.board(board.id, demo.user.id)).toMatchObject({ board: { id: board.id }, team: { id: teamId } });
+    expect(await r.access.column(column.id, demo.user.id)).toMatchObject({ column: { id: column.id } });
+    expect(await r.access.task(task.id, demo.user.id)).toMatchObject({ task: { id: task.id, labelIds: [bug.id] } });
+    expect((await r.tasks.listForBoard(board.id)).find((t) => t.id === task.id)?.labelIds).toEqual([bug.id]);
+    expect((await r.workspaces.listWithBoards(teamId)).find((w) => w.id === workspace.id)?.boards.map((b) => b.id)).toContain(board.id);
+
+    expect(await mate.repos.access.team(slug, mate.user.id)).toBeNull();
+    expect(await mate.repos.access.task(task.id, mate.user.id)).toBeNull();
+    expect(await mate.repos.access.board(board.id, demo.user.id)).toBeNull(); // RLS hides it from mate's session
+  });
+
   it("keeps other teams' data invisible and untouchable", async () => {
     const r = demo.repos;
     const [workspace] = await r.workspaces.listForTeam(teamId);

@@ -237,6 +237,13 @@ export function createMockRepositories(store: MockStore, session: SessionStore =
       get: (id) => store.read((db) => db.workspaces.find((w) => w.id === id) ?? null),
       listForTeam: (teamId) =>
         store.read((db) => db.workspaces.filter((w) => w.teamId === teamId).sort(byCreatedAt)),
+      listWithBoards: (teamId) =>
+        store.read((db) =>
+          db.workspaces
+            .filter((w) => w.teamId === teamId)
+            .sort(byCreatedAt)
+            .map((w) => ({ ...w, boards: db.boards.filter((b) => b.workspaceId === w.id).sort(byCreatedAt) })),
+        ),
       update: (id, patch) =>
         store.write((db) => {
           const workspace = find(db.workspaces, (w) => w.id === id, "Workspace", id);
@@ -263,6 +270,12 @@ export function createMockRepositories(store: MockStore, session: SessionStore =
           return board;
         }),
       get: (id) => store.read((db) => db.boards.find((b) => b.id === id) ?? null),
+      listColumnsForBoards: (boardIds) =>
+        store.read((db) =>
+          db.columns
+            .filter((c) => boardIds.includes(c.boardId))
+            .sort((a, b) => boardIds.indexOf(a.boardId) - boardIds.indexOf(b.boardId) || byPosition(a, b)),
+        ),
       listForWorkspace: (workspaceId) =>
         store.read((db) => db.boards.filter((b) => b.workspaceId === workspaceId).sort(byCreatedAt)),
       update: (id, patch) =>
@@ -615,6 +628,28 @@ export function createMockRepositories(store: MockStore, session: SessionStore =
             .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
         ),
     },
+
+    access: {
+      team: (slug, userId) =>
+        store.read((db) => {
+          const team = db.teams.find((t) => t.slug === slug);
+          return team ? teamAccess(db, team.id, userId) : null;
+        }),
+      workspace: (id, userId) => store.read((db) => workspaceAccess(db, id, userId)),
+      board: (id, userId) => store.read((db) => boardAccess(db, id, userId)),
+      column: (id, userId) =>
+        store.read((db) => {
+          const column = db.columns.find((c) => c.id === id);
+          const access = column && boardAccess(db, column.boardId, userId);
+          return access ? { ...access, column: column! } : null;
+        }),
+      task: (id, userId) =>
+        store.read((db) => {
+          const task = db.tasks.find((t) => t.id === id);
+          const access = task && boardAccess(db, task.boardId, userId);
+          return access ? { ...access, task: task! } : null;
+        }),
+    },
   };
 }
 
@@ -624,4 +659,22 @@ const ALREADY_WORKING = "This AI teammate is already working on this task.";
 function assertUniqueAgentName(db: MockDb, teamId: string, name: string, exceptId?: string) {
   const taken = db.agents.some((a) => a.teamId === teamId && a.id !== exceptId && a.name.toLowerCase() === name.toLowerCase());
   if (taken) throw new ConflictError("name", "An AI teammate with this name already exists");
+}
+
+function teamAccess(db: MockDb, teamId: string, userId: string) {
+  const team = db.teams.find((t) => t.id === teamId);
+  const membership = db.memberships.find((m) => m.teamId === teamId && m.userId === userId);
+  return team && membership ? { team, membership } : null;
+}
+
+function workspaceAccess(db: MockDb, workspaceId: string, userId: string) {
+  const workspace = db.workspaces.find((w) => w.id === workspaceId);
+  const access = workspace && teamAccess(db, workspace.teamId, userId);
+  return access ? { ...access, workspace: workspace! } : null;
+}
+
+function boardAccess(db: MockDb, boardId: string, userId: string) {
+  const board = db.boards.find((b) => b.id === boardId);
+  const access = board && workspaceAccess(db, board.workspaceId, userId);
+  return access ? { ...access, board: board! } : null;
 }

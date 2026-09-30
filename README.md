@@ -19,6 +19,8 @@ Set `ANTHROPIC_API_KEY` in `.env.local` to enable the AI task writer (**Write wi
 
 On Pro, the board's **Copilot** panel (`claude-sonnet-5`) answers questions about the board and proposes changes (create, update, move, assign); each change is a card you approve or deny, and it runs with your permissions. Set `TOOL_APPROVAL_SECRET` in production so approvals are signed with a shared key.
 
+Also on Pro, managers add **AI teammates** in **Settings → AI teammates** (a name and a specialty). Assign a task to one and it writes a first result (a spec, plan or draft) as a comment, then moves the task to **In Review**; the task sheet shows its runs and a **Run again** button. Runs happen in the background after the request (`after()`); a job queue can take over later.
+
 ### Plans
 
 Teams start on **Free** (just you, 1 workspace); **Lite** allows 3 people and 10 workspaces; **Pro** is unlimited. Billing is simulated: the owner upgrades from **Settings → Billing** through a test checkout, and nothing is charged. Limits live in `src/lib/domain/plans.ts` and are enforced by the server actions and by the database. The seeded demo team is on Pro.

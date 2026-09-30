@@ -72,7 +72,7 @@ Real Stripe was skipped by decision (2026-09-29): billing is **simulated**, and 
 ## M8 — AI II: Board copilot ✅
 - Side-panel chat (`useChat`) with tools: search/create/update/move/assign/summarize; confirm cards for mutations; runs with user's permissions.
 
-## M9 — AI III: AI teammate
+## M9 — AI III: AI teammate ✅
 - `ai_agents` as assignable members; assignment enqueues a job (`agent_runs` table); worker runs the agent (route handler + `after()` locally; cron/queue later), posts comment, moves task to In Review.
 - Run history & retry on the task sheet.
 

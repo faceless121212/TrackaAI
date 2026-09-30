@@ -17,7 +17,7 @@ This file holds the detailed, task-level plan for the **current** milestone. Eac
 | M6 — Plans & billing (simulated) | ✅ Done |
 | M7 — AI I: task writer & breakdown | ✅ Done |
 | M8 — AI II: board copilot | ✅ Done |
-| M9 — AI III: AI teammate | 🚧 In progress |
+| M9 — AI III: AI teammate | ✅ Done |
 | M10 — Hardening & launch | — |
 
 ---
@@ -15478,6 +15478,17 @@ Gotchas:
 4. Actions: manage agents (settings, managers, Pro), start a run on assignment, retry.
 5. UI: **Settings → AI teammates**; agents in the assignee pickers and on cards; comment authors; run history, working state and Retry in the task sheet.
 6. E2E (mock model), one live run, docs, pre-PR review → PR → auto-merge.
+
+### Build record
+
+Shipped as planned. Verified live with `claude-sonnet-5` on a throwaway Pro team: the teammate posted a structured spec (summary, assumptions, goal, acceptance criteria) as a comment and moved the task to In Review. The team was deleted afterwards.
+
+Gotchas:
+1. The run executes in `after()` of the server action that assigned the task, with the requester's session. The database functions check `requested_by = auth.uid()` at every step, so the run can't be driven by anyone else, and nobody can post as an agent directly.
+2. Assigning the same agent again doesn't start a new run (only a change of assignee does); **Run again** starts a fresh run explicitly. One active run per task is a unique partial index.
+3. The task sheet polls with `router.refresh()` every 3 s while a run is queued or running.
+4. Mock runs created in the same millisecond need a stable newest-first order (reverse, then sort).
+5. Known limitation: without a queue, a run is lost if the server stops mid-run; it stays "running". A queue or cron (M10+) should pick up stale runs.
 
 ## Next up: M10
 

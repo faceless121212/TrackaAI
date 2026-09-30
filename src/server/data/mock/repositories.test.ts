@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { DEFAULT_COLUMNS, DEFAULT_LABELS, createTaskInputSchema, type User } from "@/lib/domain";
-import { ConflictError, NotFoundError, PlanLimitError } from "../errors";
+import { AI_RATE_LIMIT, DEFAULT_COLUMNS, DEFAULT_LABELS, createTaskInputSchema, type User } from "@/lib/domain";
+import { ConflictError, NotFoundError, PlanLimitError, RateLimitError } from "../errors";
 import type { Repositories } from "../types";
 import { emptyDb } from "./db";
 import { createMockRepositories } from "./repositories";
@@ -132,6 +132,18 @@ describe("AI usage", () => {
     const run = { teamId: team.id, userId: owner.id, feature: "task_writer" as const, model: "m" };
     for (let i = 0; i < 10; i++) await repos.aiUsage.startRun(run);
     await expect(repos.aiUsage.startRun(run)).rejects.toBeInstanceOf(PlanLimitError);
+  });
+
+  it("limits each user's interactive runs per minute, even on Pro, but not AI teammate runs", async () => {
+    const team = await repos.teams.create({ name: "Acme", slug: "acme", ownerId: owner.id });
+    await repos.teams.setPlan(team.id, "pro");
+    const run = { teamId: team.id, userId: owner.id, feature: "copilot" as const, model: "m" };
+    for (let i = 0; i < AI_RATE_LIMIT.runs; i++) await repos.aiUsage.startRun(run);
+    await expect(repos.aiUsage.startRun(run)).rejects.toBeInstanceOf(RateLimitError);
+    await repos.aiUsage.startRun({ ...run, feature: "agent" });
+    const minuteAgo = new Date(Date.now() - (AI_RATE_LIMIT.windowSeconds + 1) * 1000).toISOString();
+    await store.write((db) => db.aiUsage.forEach((u) => (u.createdAt = minuteAgo)));
+    await repos.aiUsage.startRun(run);
   });
 });
 

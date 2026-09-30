@@ -43,4 +43,4 @@ export async function getBackgroundRepositories(): Promise<Repositories> {
 }
 
 export type * from "./types";
-export { ConflictError, NotFoundError, PlanLimitError } from "./errors";
+export { ConflictError, NotFoundError, PlanLimitError, RateLimitError } from "./errors";

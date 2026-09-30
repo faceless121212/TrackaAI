@@ -4,8 +4,8 @@
 // as in the app. `pnpm test:supabase` (reads NEXT_PUBLIC_SUPABASE_* from .env.local).
 import { createClient } from "@supabase/supabase-js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { DEFAULT_COLUMNS, DEFAULT_LABELS, createTaskInputSchema } from "@/lib/domain";
-import { ConflictError, NotFoundError, PlanLimitError } from "../errors";
+import { AI_RATE_LIMIT, DEFAULT_COLUMNS, DEFAULT_LABELS, createTaskInputSchema } from "@/lib/domain";
+import { ConflictError, NotFoundError, PlanLimitError, RateLimitError } from "../errors";
 import type { Database } from "./database.types";
 import { createSupabaseRepositories } from "./repositories";
 
@@ -78,6 +78,14 @@ describe.skipIf(!url || !key)("Supabase repositories (live project)", () => {
     expect(await demo.repos.teams.usage(teamId)).toMatchObject({ members: 1, pendingInvites: 0 });
     // Pro for the rest of the suite, so limits don't mask the checks below.
     await demo.repos.teams.setPlan(teamId, "pro");
+  });
+
+  it("rate-limits a burst of AI runs (the runs go with the team in afterAll)", async () => {
+    const run = { teamId, userId: demo.user.id, feature: "task_writer" as const, model: "m" };
+    for (let i = 0; i < AI_RATE_LIMIT.runs; i++) await demo.repos.aiUsage.startRun(run);
+    const refused = demo.repos.aiUsage.startRun(run);
+    await expect(refused).rejects.toBeInstanceOf(RateLimitError);
+    await expect(refused).rejects.toMatchObject({ retryAfter: AI_RATE_LIMIT.windowSeconds });
   });
 
   it("runs the whole board lifecycle", async () => {

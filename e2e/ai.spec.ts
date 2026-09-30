@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { column, openFreshBoard } from "./helpers";
+import { column, openFreshBoard, upgradeTo } from "./helpers";
 
 // The e2e server runs with AI_MOCK=1: a mock model streams canned drafts.
 
@@ -72,4 +72,16 @@ test("a Free team gets 10 AI runs a month, then is pointed to the plans", async 
   await dialog.getByRole("link", { name: "See plans" }).click();
   await expect(page.getByText("AI runs this month")).toBeVisible();
   await expect(page.getByText("10 of 10")).toBeVisible();
+});
+
+test("a burst of AI requests is slowed down with a 429, even on Pro", async ({ page }) => {
+  await openFreshBoard(page);
+  const boardId = page.url().split("/board/")[1];
+  await upgradeTo(page, "Pro");
+  const write = () => page.request.post("/api/ai/task-writer", { data: { boardId, prompt: "a task" } });
+  for (let i = 0; i < 20; i++) expect((await write()).status()).toBe(200);
+  const refused = await write();
+  expect(refused.status()).toBe(429);
+  expect(refused.headers()["retry-after"]).toBe("60");
+  expect((await refused.json()).error).toMatch(/going a bit fast/);
 });

@@ -24,7 +24,15 @@ import {
   type User,
   type Workspace,
 } from "@/lib/domain";
-import { AGENT_BUSY, AGENT_DAILY_LIMIT, AGENT_NOT_ASSIGNED, ConflictError, NotFoundError, PlanLimitError } from "../errors";
+import {
+  AGENT_BUSY,
+  AGENT_DAILY_LIMIT,
+  AGENT_NOT_ASSIGNED,
+  ConflictError,
+  NotFoundError,
+  PlanLimitError,
+  RateLimitError,
+} from "../errors";
 import type { Repositories } from "../types";
 import type { Database } from "./database.types";
 
@@ -232,6 +240,7 @@ function toError(error: PostgrestError): Error {
   if (error.message === "plan_limit_reached") {
     return new PlanLimitError(planSchema.parse(error.hint), error.details as PlanResource);
   }
+  if (error.message === "rate_limited") return new RateLimitError(Number(error.details) || 60);
   if (RAISED[error.message]) return RAISED[error.message]();
   // PGRST116: .single() found no row — RLS hid it or it doesn't exist.
   if (error.code === "PGRST116") return new NotFoundError("Row", "id");

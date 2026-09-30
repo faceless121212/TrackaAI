@@ -12,6 +12,9 @@ import { getRepositories } from "@/server/data";
 import { resolveDataBackend } from "@/server/data/backend";
 
 export const metadata: Metadata = { title: "Board" };
+// Server actions from this page may keep working after the response: an AI
+// teammate run (after()) needs up to about a minute.
+export const maxDuration = 120;
 
 export default async function BoardPage({ params, searchParams }: PageProps<"/[team]/board/[boardId]">) {
   const [{ team: teamSlug, boardId }, { task: taskKey }] = await Promise.all([params, searchParams]);
@@ -21,16 +24,19 @@ export default async function BoardPage({ params, searchParams }: PageProps<"/[t
   const workspace = board ? await repos.workspaces.get(board.workspaceId) : null;
   if (!board || !workspace || workspace.teamId !== team.id) notFound();
 
-  const [columns, tasks, members, labels] = await Promise.all([
+  const [columns, tasks, members, labels, agents] = await Promise.all([
     repos.boards.listColumns(board.id),
     repos.tasks.listForBoard(board.id),
     repos.memberships.listMembers(team.id),
     repos.labels.listForTeam(team.id),
+    repos.agents.listForTeam(team.id),
   ]);
   // ?task=ENG-12 opens the task sheet (PRD §5.3).
   const openTask =
     typeof taskKey === "string" ? (tasks.find((task) => task.key === taskKey.toUpperCase()) ?? null) : null;
-  const comments = openTask ? await repos.comments.listForTask(openTask.id) : [];
+  const [comments, agentRuns] = openTask
+    ? await Promise.all([repos.comments.listForTask(openTask.id), repos.agentRuns.listForTask(openTask.id)])
+    : [[], []];
 
   return (
     <BoardView
@@ -50,6 +56,9 @@ export default async function BoardPage({ params, searchParams }: PageProps<"/[t
       currentUserId={user.id}
       canManage={can(membership.role, "column:manage")}
       aiEnabled={aiAvailable()}
+      agents={agents.map(({ id, name, specialty }) => ({ id, name, specialty }))}
+      canAssignAgents={PLAN_CATALOG[team.plan].features.aiTeammate}
+      agentRuns={agentRuns}
       copilot={copilotAccess(team, membership.role)}
       canModerate={can(membership.role, "comment:moderate")}
       realtime={

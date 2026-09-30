@@ -9,6 +9,7 @@ const SECTIONS: { section: SettingsSection; label: string }[] = [
   { section: "general", label: "General" },
   { section: "members", label: "Members" },
   { section: "labels", label: "Labels" },
+  { section: "agents", label: "AI teammates" },
   { section: "profile", label: "Profile" },
   { section: "billing", label: "Billing" },
 ];

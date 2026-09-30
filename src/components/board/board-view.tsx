@@ -21,7 +21,7 @@ import {
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useOptimistic, useState, useTransition } from "react";
 import { toast } from "sonner";
-import type { MemberOption } from "@/components/tasks/member-avatar";
+import type { AgentOption, MemberOption } from "@/components/tasks/member-avatar";
 import {
   filterTasks,
   isFiltered,
@@ -35,6 +35,7 @@ import {
   type Label,
   type Task,
   type UpdateTaskInput,
+  type AgentRun,
 } from "@/lib/domain";
 import type { ActionResult } from "@/lib/forms";
 import { addColumnAction, deleteColumnAction, moveColumnAction, renameColumnAction } from "@/server/actions/boards";
@@ -70,6 +71,12 @@ export type BoardViewProps = {
   realtime: RealtimeConfig;
   /** Whether the AI task writer and breakdown are available. */
   aiEnabled: boolean;
+  /** The team's AI teammates. */
+  agents: AgentOption[];
+  /** Whether AI teammates can be newly assigned (Pro). */
+  canAssignAgents: boolean;
+  /** The open task's AI teammate runs, newest first. */
+  agentRuns: AgentRun[];
   /** The board copilot: on (Pro), an upgrade note, or hidden (null: AI not set up). */
   copilot: CopilotAccess | null;
 };
@@ -137,6 +144,7 @@ export function BoardView(props: BoardViewProps) {
       optimistic();
       const result = await action();
       if (!result.ok) toast.error(result.error);
+      else if (result.warning) toast.warning(result.warning);
     });
   }
 
@@ -288,7 +296,12 @@ export function BoardView(props: BoardViewProps) {
     task,
     href: taskHref(task.key),
     labels: labels.filter((label) => task.labelIds.includes(label.id)),
-    assignee: task.assignee?.kind === "user" ? memberById.get(task.assignee.userId) : undefined,
+    assignee:
+      task.assignee?.kind === "user"
+        ? memberById.get(task.assignee.userId)
+        : task.assignee?.kind === "agent"
+          ? agentAvatar(props.agents, task.assignee.agentId)
+          : undefined,
   });
   const activeTask = activeTaskId ? taskById.get(activeTaskId) : undefined;
   const defaultColumnId = (columns.find((column) => column.name === "Todo") ?? columns[0])?.id ?? "";
@@ -372,12 +385,16 @@ export function BoardView(props: BoardViewProps) {
         columns={columns}
         members={members}
         labels={labels}
+        agents={props.canAssignAgents ? props.agents : []}
         defaultColumnId={defaultColumnId}
         aiEnabled={props.aiEnabled}
       />
       <TaskSheet
         task={openTask}
         subtasks={openTask ? tasks.filter((task) => task.parentId === openTask.id) : []}
+        agents={props.agents}
+        canAssignAgents={props.canAssignAgents}
+        agentRuns={props.agentRuns}
         aiEnabled={props.aiEnabled}
         onOpenTask={(task) => replaceParams((params) => params.set("task", task.key))}
         columns={columns}
@@ -393,4 +410,9 @@ export function BoardView(props: BoardViewProps) {
       />
     </div>
   );
+}
+
+function agentAvatar(agents: AgentOption[], id: string) {
+  const agent = agents.find((a) => a.id === id);
+  return { name: agent ? `${agent.name} (AI)` : "AI teammate (removed)", agent: true };
 }

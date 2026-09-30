@@ -7,3 +7,4 @@ export * from "./positions";
 export * from "./task-refs";
 export * from "./plans";
 export * from "./ai";
+export * from "./agents";

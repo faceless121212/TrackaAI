@@ -58,12 +58,17 @@ export async function createWorkspaceWithBoard(team: Pick<Team, "id" | "plan">, 
 /** Rejects assignees who aren't team members and labels from other teams. */
 export async function assertTaskRefs(teamId: string, patch: Pick<UpdateTaskInput, "assignee" | "labelIds">) {
   const repos = getRepositories();
-  const [members, labels] = await Promise.all([repos.memberships.list(teamId), repos.labels.listForTeam(teamId)]);
+  const [members, agents, labels] = await Promise.all([
+    repos.memberships.list(teamId),
+    repos.agents.listForTeam(teamId),
+    repos.labels.listForTeam(teamId),
+  ]);
   const field = invalidTaskRef(patch, {
     memberIds: new Set(members.map((m) => m.userId)),
+    agentIds: new Set(agents.map((a) => a.id)),
     labelIds: new Set(labels.map((l) => l.id)),
   });
-  if (field) throw new ConflictError(field, field === "assignee" ? "Pick a member of this team" : "Unknown label");
+  if (field) throw new ConflictError(field, field === "assignee" ? "Pick a member or AI teammate of this team" : "Unknown label");
 }
 
 /** Absolute URL for a path, for links that leave the app (invite links, emails). */

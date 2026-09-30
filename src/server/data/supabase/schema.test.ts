@@ -721,6 +721,195 @@ describe("AI usage", () => {
   });
 });
 
+describe("AI teammates", () => {
+  let db: PGlite;
+  let t: Awaited<ReturnType<typeof makeTeam>>;
+  let other: Awaited<ReturnType<typeof makeTeam>>;
+  let member: string;
+  let agent: string;
+  let otherAgent: string;
+
+  beforeAll(async () => {
+    db = await createTestDb();
+    t = await makeTeam(db, "bots");
+    other = await makeTeam(db, "rivals");
+    member = await createUser(db, "bots-member@example.test");
+    const token = await invite(db, t, "bots-member@example.test");
+    await asUser(db, member, (tx) => tx.query("select * from accept_invite($1)", [token]));
+    agent = (
+      await asUser(db, t.owner, (tx) =>
+        one<{ id: string }>(tx, "insert into ai_agents (team_id, name, specialty, created_by) values ($1, 'Spec writer', 'Writes specs', $2) returning id", [t.team, t.owner]),
+      )
+    ).id;
+    otherAgent = (
+      await asUser(db, other.owner, (tx) =>
+        one<{ id: string }>(tx, "insert into ai_agents (team_id, name, created_by) values ($1, 'Rival bot', $2) returning id", [other.team, other.owner]),
+      )
+    ).id;
+  });
+
+  it("lets managers manage agents, members see them, and other teams not at all", async () => {
+    await expect(
+      asUser(db, member, (tx) =>
+        tx.query("insert into ai_agents (team_id, name, created_by) values ($1, 'Mine', $2)", [t.team, member]),
+      ),
+    ).rejects.toThrow(/row-level security/);
+    await expect(
+      asUser(db, t.owner, (tx) =>
+        tx.query("insert into ai_agents (team_id, name, created_by) values ($1, 'spec WRITER', $2)", [t.team, t.owner]),
+      ),
+    ).rejects.toThrow(/ai_agents_team_name/);
+    expect(await asUser(db, member, (tx) => count(tx, `ai_agents where team_id = '${t.team}'`))).toBe(1);
+    expect(await asUser(db, other.owner, (tx) => count(tx, `ai_agents where team_id = '${t.team}'`))).toBe(0);
+  });
+
+  it("assigns tasks only to the team's own agents", async () => {
+    await asUser(db, member, (tx) => tx.query("update tasks set assignee_agent_id = $1 where id = $2", [agent, t.task.id]));
+    await expect(
+      asUser(db, member, (tx) => tx.query("update tasks set assignee_agent_id = $1 where id = $2", [otherAgent, t.task.id])),
+    ).rejects.toThrow(/assignee_not_member/);
+  });
+
+  it("runs a task: queued, claimed and finished by the requester, with a comment by the agent", async () => {
+    const run = await asUser(db, member, (tx) =>
+      one<{ id: string }>(tx, "select start_agent_run($1, $2) as id", [t.task.id, agent]),
+    );
+    await expect(
+      asUser(db, member, (tx) => tx.query("select start_agent_run($1, $2)", [t.task.id, agent])),
+    ).rejects.toThrow(/agent_runs_one_active/);
+    // Only the requester moves the run along.
+    expect(await asUser(db, t.owner, (tx) => one(tx, "select claim_agent_run($1) as ok", [run.id]))).toEqual({ ok: false });
+    expect(await asUser(db, member, (tx) => one(tx, "select claim_agent_run($1) as ok", [run.id]))).toEqual({ ok: true });
+    await asUser(db, member, (tx) => tx.query("select finish_agent_run($1, 'Here is the spec.')", [run.id]));
+
+    expect(await one(db, "select status, comment_id is not null as commented from agent_runs where id = $1", [run.id])).toEqual({
+      status: "succeeded",
+      commented: true,
+    });
+    expect(
+      await one(db, "select author_user_id, author_agent_id, body from comments where task_id = $1 and author_agent_id is not null", [t.task.id]),
+    ).toEqual({ author_user_id: null, author_agent_id: agent, body: "Here is the spec." });
+    expect(await asUser(db, member, (tx) => count(tx, `agent_runs where task_id = '${t.task.id}'`))).toBe(1);
+    expect(await asUser(db, other.owner, (tx) => count(tx, `agent_runs where task_id = '${t.task.id}'`))).toBe(0);
+  });
+
+  it("records failures and allows a retry", async () => {
+    const run = await asUser(db, member, (tx) => one<{ id: string }>(tx, "select start_agent_run($1, $2) as id", [t.task.id, agent]));
+    await asUser(db, member, (tx) => tx.query("select claim_agent_run($1)", [run.id]));
+    await asUser(db, member, (tx) => tx.query("select fail_agent_run($1, 'model overloaded')", [run.id]));
+    expect(await one(db, "select status, error from agent_runs where id = $1", [run.id])).toEqual({ status: "failed", error: "model overloaded" });
+    await asUser(db, member, (tx) => tx.query("select start_agent_run($1, $2)", [t.task.id, agent]));
+  });
+
+  it("refuses runs for other teams' agents, outsiders and non-Pro teams", async () => {
+    await expect(
+      asUser(db, member, (tx) => tx.query("select start_agent_run($1, $2)", [t.task.id, otherAgent])),
+    ).rejects.toThrow(/agent_not_found/);
+    await expect(
+      asUser(db, other.owner, (tx) => tx.query("select start_agent_run($1, $2)", [t.task.id, agent])),
+    ).rejects.toThrow(/forbidden/);
+    const free = await makeTeam(db, "freebots", "free");
+    const freeAgent = await one<{ id: string }>(db, "insert into ai_agents (team_id, name) values ($1, 'Bot') returning id", [free.team]);
+    await expect(
+      asUser(db, free.owner, (tx) => tx.query("select start_agent_run($1, $2)", [free.task.id, freeAgent.id])),
+    ).rejects.toThrow(/agents_require_pro/);
+  });
+
+  it("creates tasks already assigned to an agent", async () => {
+    const created = await asUser(db, member, (tx) =>
+      one<{ assignee_agent_id: string }>(
+        tx,
+        "select * from create_task($1, $2, 'Agent task', '', 'none', null, '{}', null, null, 'c0', $3, $4)",
+        [t.board, t.column, member, agent],
+      ),
+    );
+    expect(created.assignee_agent_id).toBe(agent);
+    await expect(
+      asUser(db, member, (tx) =>
+        tx.query("select * from create_task($1, $2, 'X', '', 'none', null, '{}', null, null, 'c1', $3, $4)", [t.board, t.column, member, otherAgent]),
+      ),
+    ).rejects.toThrow(/assignee_not_member/);
+  });
+
+  it("only runs the agent a task is assigned to", async () => {
+    const task = await asUser(db, member, (tx) =>
+      one<{ id: string }>(tx, "select * from create_task($1, $2, 'Unassigned', '', 'none', null, '{}', null, null, 'c2')", [t.board, t.column]),
+    );
+    await expect(
+      asUser(db, member, (tx) => tx.query("select start_agent_run($1, $2)", [task.id, agent])),
+    ).rejects.toThrow(/agent_not_assigned/);
+  });
+
+  it("times out stale runs so the task can run again", async () => {
+    const task = await asUser(db, member, (tx) =>
+      one<{ id: string }>(tx, "select * from create_task($1, $2, 'Stale', '', 'none', null, '{}', null, null, 'c3', $3, $4)", [t.board, t.column, member, agent]),
+    );
+    const stale = await asUser(db, member, (tx) => one<{ id: string }>(tx, "select start_agent_run($1, $2) as id", [task.id, agent]));
+    await db.query("update agent_runs set created_at = now() - interval '11 minutes' where id = $1", [stale.id]);
+    await asUser(db, t.owner, (tx) => tx.query("select start_agent_run($1, $2)", [task.id, agent]));
+    expect(await one(db, "select status, error from agent_runs where id = $1", [stale.id])).toEqual({
+      status: "failed",
+      error: "Timed out",
+    });
+  });
+
+  it("caps a team's concurrent and daily runs", async () => {
+    const cap = await makeTeam(db, "capped");
+    const capAgent = await one<{ id: string }>(db, "insert into ai_agents (team_id, name) values ($1, 'Bot') returning id", [cap.team]);
+    const newTask = (n: number) =>
+      asUser(db, cap.owner, (tx) =>
+        one<{ id: string }>(tx, `select * from create_task($1, $2, 'T${n}', '', 'none', null, '{}', null, null, 'd${n}', $3, $4)`, [cap.board, cap.column, cap.owner, capAgent.id]),
+      );
+    for (let n = 0; n < 3; n++) {
+      const task = await newTask(n);
+      await asUser(db, cap.owner, (tx) => tx.query("select start_agent_run($1, $2)", [task.id, capAgent.id]));
+    }
+    const fourth = await newTask(3);
+    await expect(
+      asUser(db, cap.owner, (tx) => tx.query("select start_agent_run($1, $2)", [fourth.id, capAgent.id])),
+    ).rejects.toThrow(/agent_busy/);
+
+    await db.query("update agent_runs set status = 'succeeded' where team_id = $1", [cap.team]);
+    await db.query(
+      `insert into agent_runs (team_id, task_id, agent_id, status) select $1, $2, $3, 'succeeded' from generate_series(1, 47)`,
+      [cap.team, fourth.id, capAgent.id],
+    );
+    await expect(
+      asUser(db, cap.owner, (tx) => tx.query("select start_agent_run($1, $2)", [fourth.id, capAgent.id])),
+    ).rejects.toThrow(/agent_daily_limit/);
+  });
+
+  it("adds agents only on Pro, and a comment has one author", async () => {
+    const free = await makeTeam(db, "freeagents", "free");
+    await expect(
+      asUser(db, free.owner, (tx) =>
+        tx.query("insert into ai_agents (team_id, name, created_by) values ($1, 'Bot', $2)", [free.team, free.owner]),
+      ),
+    ).rejects.toThrow(/row-level security/);
+    await expect(
+      asUser(db, member, (tx) =>
+        tx.query("insert into comments (task_id, author_user_id, author_agent_id, body) values ($1, $2, $3, 'both')", [t.task.id, member, agent]),
+      ),
+    ).rejects.toThrow(/check constraint|row-level security/);
+  });
+
+  it("never lets anyone write runs or agent comments directly", async () => {
+    await expect(
+      asUser(db, member, (tx) =>
+        tx.query("insert into agent_runs (team_id, task_id, agent_id, requested_by) values ($1, $2, $3, $4)", [t.team, t.task.id, agent, member]),
+      ),
+    ).rejects.toThrow(/permission denied/);
+    await expect(
+      asUser(db, member, (tx) => tx.query("update agent_runs set status = 'succeeded'")),
+    ).rejects.toThrow(/permission denied/);
+    await expect(
+      asUser(db, member, (tx) =>
+        tx.query("insert into comments (task_id, author_agent_id, body) values ($1, $2, 'fake')", [t.task.id, agent]),
+      ),
+    ).rejects.toThrow(/row-level security/);
+  });
+});
+
 describe("function grants", () => {
   it("keeps RLS helpers out of the API schema and away from signed-out visitors", async () => {
     const db = await createTestDb();

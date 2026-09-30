@@ -17,7 +17,7 @@ This file holds the detailed, task-level plan for the **current** milestone. Eac
 | M6 — Plans & billing (simulated) | ✅ Done |
 | M7 — AI I: task writer & breakdown | ✅ Done |
 | M8 — AI II: board copilot | ✅ Done |
-| M9 — AI III: AI teammate | — |
+| M9 — AI III: AI teammate | ✅ Done |
 | M10 — Hardening & launch | — |
 
 ---
@@ -15458,6 +15458,49 @@ Gotchas:
    - The chat survives closing the panel, and there is a "New chat" button.
 7. Each approval continuation is a new request, so one approved change reserves two AI runs (unlimited on Pro; it shows in `ai_usage`).
 
-## Next up: M9
+---
 
-AI teammate (assignable agent members and background runs), once M8 is merged.
+# M9 — AI III: AI teammate — Plan
+
+**Goal:** On Pro, managers add AI teammates (a name and a specialty, e.g. "Spec writer: turns tasks into specs"). Anyone can assign a task to one. Assigning queues a run: the teammate reads the task (and its recent comments), writes its result as a comment, and moves the task to **In Review** for a human. The task sheet shows run history, a live "working" state and **Retry** for failed runs.
+
+**Architecture:**
+- Tables: `ai_agents` (team-scoped; managers create, rename and delete) and `agent_runs` (queued → running → succeeded | failed; at most one active run per task).
+- `tasks.assignee_agent_id` and `comments.author_agent_id` get foreign keys; the task-refs trigger checks the agent is in the task's team.
+- Runs change state only through SECURITY DEFINER functions: `start_agent_run` (Pro only), `claim_agent_run`, `finish_agent_run` (inserts the agent-authored comment) and `fail_agent_run`. Each checks the caller is the member who requested the run. Nobody can post as an agent directly.
+- Worker: assigning a task to an agent (the task sheet, or the copilot's assign tool later) starts a run, and `after()` runs it with the requester's session. The model is `claude-sonnet-5` with plain Markdown output, and the task text is treated as data. The run is metered in `ai_usage` (feature `agent`). A queue or cron can replace `after()` later.
+- The client refreshes while a run is active (polling every few seconds), so the comment and the move show up without a reload.
+
+**Tasks:**
+1. Migration + PGlite tests (tables, RLS, FKs, trigger, run functions, usage feature).
+2. Domain types and repositories (`agents`, `agentRuns`) in mock and Supabase.
+3. The runner (`src/server/ai/agent/run.ts`), tested with the mock repositories and a mock model.
+4. Actions: manage agents (settings, managers, Pro), start a run on assignment, retry.
+5. UI: **Settings → AI teammates**; agents in the assignee pickers and on cards; comment authors; run history, working state and Retry in the task sheet.
+6. E2E (mock model), one live run, docs, pre-PR review → PR → auto-merge.
+
+### Build record
+
+Shipped as planned. Verified live with `claude-sonnet-5` on a throwaway Pro team: the teammate posted a structured spec (summary, assumptions, goal, acceptance criteria) as a comment and moved the task to In Review. The team was deleted afterwards.
+
+Gotchas:
+1. The run executes in `after()` of the server action that assigned the task, as the requester. The database functions check `requested_by = auth.uid()` at every step, so no one can drive someone else's run.
+   - Known limitation: without a server-side worker key, the requester's own client could call `finish_agent_run` with its own text. That would put words under the teammate's name on a task assigned to it, in their own team, and it's recorded in `agent_runs`. A service-role worker would close this; M10 can add one.
+2. Assigning the same agent again doesn't start a new run (only a change of assignee does); **Run again** starts a fresh run explicitly. One active run per task is a unique partial index.
+3. The task sheet polls with `router.refresh()` every 3 s while a run is queued or running.
+4. Mock runs created in the same millisecond need a stable newest-first order (reverse, then sort).
+5. Without a queue, a run is lost if the server stops mid-run. It no longer blocks the task: runs older than 10 minutes time out when the next run starts, and the sheet stops polling after 10 minutes. A queue or cron (M10+) should retry them.
+6. (Pre-PR review) Fixes:
+   - Supabase's `create_task` ignored an agent assignee, so the create dialog lost it; `create_task` now takes `p_assignee_agent`.
+   - A run needs the task to be assigned to that agent.
+   - A team has at most 3 active runs and 50 a day (fair use on Pro).
+   - Adding agents needs Pro, also in RLS.
+   - A comment has at most one author.
+   - Background runs use a client that carries only the access token, so they can't rotate the session after the response.
+   - A finishing run re-reads the task: if it was reassigned it posts nothing, and if someone moved it the task stays where they put it.
+   - Agent comments render as untrusted Markdown (no images, `nofollow` links).
+   - A run that can't start after an assignment is a warning, not an error; reassigning during a run is refused up front.
+
+## Next up: M10
+
+Hardening & launch, once M9 is merged.

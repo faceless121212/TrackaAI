@@ -15,8 +15,10 @@ import {
   type Membership,
   type Task,
   type User,
+  isActiveRun,
+  type AgentRun,
 } from "@/lib/domain";
-import { ConflictError, NotFoundError, PlanLimitError } from "../errors";
+import { AGENT_BUSY, AGENT_DAILY_LIMIT, AGENT_NOT_ASSIGNED, ConflictError, NotFoundError, PlanLimitError } from "../errors";
 import type { Repositories } from "../types";
 import type { MockDb } from "./db";
 import { hashPassword, verifyPassword } from "./password";
@@ -53,6 +55,7 @@ function taskPositions(db: MockDb, columnId: string, excludeId?: string): string
 function deleteTasks(db: MockDb, taskIds: Set<string>) {
   db.tasks = db.tasks.filter((t) => !taskIds.has(t.id));
   db.comments = db.comments.filter((c) => !taskIds.has(c.taskId));
+  db.agentRuns = db.agentRuns.filter((r) => !taskIds.has(r.taskId));
   for (const task of db.tasks) {
     if (task.parentId && taskIds.has(task.parentId)) task.parentId = null;
   }
@@ -173,6 +176,8 @@ export function createMockRepositories(store: MockStore, session: SessionStore =
           db.invites = db.invites.filter((i) => i.teamId !== id);
           db.memberships = db.memberships.filter((m) => m.teamId !== id);
           db.aiUsage = db.aiUsage.filter((u) => u.teamId !== id);
+          db.agentRuns = db.agentRuns.filter((r) => r.teamId !== id);
+          db.agents = db.agents.filter((a) => a.teamId !== id);
           db.teams = db.teams.filter((t) => t.id !== id);
         }),
     },
@@ -505,5 +510,118 @@ export function createMockRepositories(store: MockStore, session: SessionStore =
           (db) => db.aiUsage.filter((u) => u.teamId === teamId && u.createdAt >= since.toISOString()).length,
         ),
     },
+
+    agents: {
+      listForTeam: (teamId) =>
+        store.read((db) => db.agents.filter((a) => a.teamId === teamId).sort((a, b) => a.name.localeCompare(b.name))),
+      get: (id) => store.read((db) => db.agents.find((a) => a.id === id) ?? null),
+      create: (teamId, { name, specialty }) =>
+        store.write((db) => {
+          assertUniqueAgentName(db, teamId, name);
+          const agent = { id: newId(), teamId, name, specialty, createdAt: now() };
+          db.agents.push(agent);
+          return agent;
+        }),
+      update: (id, { name, specialty }) =>
+        store.write((db) => {
+          const agent = find(db.agents, (a) => a.id === id, "Agent", id);
+          assertUniqueAgentName(db, agent.teamId, name, id);
+          Object.assign(agent, { name, specialty });
+          return agent;
+        }),
+      delete: (id) =>
+        store.write((db) => {
+          for (const task of db.tasks) if (task.assignee?.kind === "agent" && task.assignee.agentId === id) task.assignee = null;
+          db.agentRuns = db.agentRuns.filter((r) => r.agentId !== id);
+          db.agents = db.agents.filter((a) => a.id !== id);
+        }),
+    },
+
+    agentRuns: {
+      start: (taskId, agentId, userId) =>
+        store.write((db) => {
+          const task = find(db.tasks, (t) => t.id === taskId, "Task", taskId);
+          const board = find(db.boards, (b) => b.id === task.boardId, "Board", task.boardId);
+          const workspace = find(db.workspaces, (w) => w.id === board.workspaceId, "Workspace", board.workspaceId);
+          const team = find(db.teams, (t) => t.id === workspace.teamId, "Team", workspace.teamId);
+          const agent = db.agents.find((a) => a.id === agentId && a.teamId === team.id);
+          if (!agent) throw new NotFoundError("Agent", agentId);
+          if (team.plan !== "pro") throw new ConflictError("plan", AGENTS_NEED_PRO);
+          if (task.assignee?.kind !== "agent" || task.assignee.agentId !== agentId) {
+            throw new ConflictError("agent", AGENT_NOT_ASSIGNED);
+          }
+          // Same rules as start_agent_run: stale runs time out, then the caps apply.
+          const staleBefore = new Date(Date.now() - 10 * 60_000).toISOString();
+          for (const r of db.agentRuns) {
+            if (r.teamId === team.id && isActiveRun(r) && r.createdAt < staleBefore) {
+              Object.assign(r, { status: "failed", finishedAt: now(), error: "Timed out" });
+            }
+          }
+          const teamRuns = db.agentRuns.filter((r) => r.teamId === team.id);
+          if (teamRuns.some((r) => r.taskId === taskId && isActiveRun(r))) throw new ConflictError("agent", ALREADY_WORKING);
+          if (teamRuns.filter(isActiveRun).length >= 3) throw new ConflictError("agent", AGENT_BUSY);
+          const dayAgo = new Date(Date.now() - DAY_MS).toISOString();
+          if (teamRuns.filter((r) => r.createdAt > dayAgo).length >= 50) throw new ConflictError("agent", AGENT_DAILY_LIMIT);
+          const run: AgentRun = {
+            id: newId(),
+            teamId: team.id,
+            taskId,
+            agentId,
+            requestedBy: userId,
+            status: "queued",
+            error: null,
+            commentId: null,
+            createdAt: now(),
+            startedAt: null,
+            finishedAt: null,
+          };
+          db.agentRuns.push(run);
+          return run;
+        }),
+      claim: (runId, userId) =>
+        store.write((db) => {
+          const run = db.agentRuns.find((r) => r.id === runId && r.requestedBy === userId && r.status === "queued");
+          if (!run) return false;
+          Object.assign(run, { status: "running", startedAt: now() });
+          return true;
+        }),
+      finish: (runId, userId, body) =>
+        store.write((db) => {
+          const run = db.agentRuns.find((r) => r.id === runId && r.requestedBy === userId && r.status === "running");
+          if (!run || !db.tasks.some((t) => t.id === run.taskId)) throw new NotFoundError("Run", runId);
+          const comment: Comment = {
+            id: newId(),
+            taskId: run.taskId,
+            author: { kind: "agent", agentId: run.agentId },
+            body: body.slice(0, 10_000),
+            createdAt: now(),
+          };
+          db.comments.push(comment);
+          Object.assign(run, { status: "succeeded", finishedAt: now(), commentId: comment.id });
+          return comment.id;
+        }),
+      fail: (runId, userId, error) =>
+        store.write((db) => {
+          const run = db.agentRuns.find((r) => r.id === runId && r.requestedBy === userId && isActiveRun(r));
+          if (run) Object.assign(run, { status: "failed", finishedAt: now(), error: error.slice(0, 500) });
+        }),
+      get: (id) => store.read((db) => db.agentRuns.find((r) => r.id === id) ?? null),
+      listForTask: (taskId) =>
+        store.read((db) =>
+          // Reversed first so runs from the same millisecond keep newest-first order.
+          db.agentRuns
+            .filter((r) => r.taskId === taskId)
+            .reverse()
+            .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+        ),
+    },
   };
+}
+
+const AGENTS_NEED_PRO = "AI teammates are part of the Pro plan.";
+const ALREADY_WORKING = "This AI teammate is already working on this task.";
+
+function assertUniqueAgentName(db: MockDb, teamId: string, name: string, exceptId?: string) {
+  const taken = db.agents.some((a) => a.teamId === teamId && a.id !== exceptId && a.name.toLowerCase() === name.toLowerCase());
+  if (taken) throw new ConflictError("name", "An AI teammate with this name already exists");
 }

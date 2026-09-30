@@ -7,6 +7,8 @@ import {
   INVITE_TTL_DAYS,
   planSchema,
   positionAt,
+  type Agent,
+  type AgentRun,
   type Assignee,
   type Board,
   type Column,
@@ -22,7 +24,7 @@ import {
   type User,
   type Workspace,
 } from "@/lib/domain";
-import { ConflictError, NotFoundError, PlanLimitError } from "../errors";
+import { AGENT_BUSY, AGENT_DAILY_LIMIT, AGENT_NOT_ASSIGNED, ConflictError, NotFoundError, PlanLimitError } from "../errors";
 import type { Repositories } from "../types";
 import type { Database } from "./database.types";
 
@@ -87,6 +89,31 @@ const toLabel = (r: Row<"labels">): Label => ({
   color: r.color as Label["color"],
 });
 
+type AgentRow = Database["public"]["Tables"]["ai_agents"]["Row"];
+type AgentRunRow = Database["public"]["Tables"]["agent_runs"]["Row"];
+
+const toAgent = (r: AgentRow): Agent => ({
+  id: r.id,
+  teamId: r.team_id,
+  name: r.name,
+  specialty: r.specialty,
+  createdAt: r.created_at,
+});
+
+const toAgentRun = (r: AgentRunRow): AgentRun => ({
+  id: r.id,
+  teamId: r.team_id,
+  taskId: r.task_id,
+  agentId: r.agent_id,
+  requestedBy: r.requested_by,
+  status: r.status as AgentRun["status"],
+  error: r.error,
+  commentId: r.comment_id,
+  createdAt: r.created_at,
+  startedAt: r.started_at,
+  finishedAt: r.finished_at,
+});
+
 function toAssignee(userId: string | null, agentId: string | null): Assignee {
   if (userId) return { kind: "user", userId };
   if (agentId) return { kind: "agent", agentId };
@@ -115,9 +142,10 @@ const toTask = (r: Row<"tasks">, labelIds: string[]): Task => ({
 const toComment = (r: Row<"comments">): Comment => ({
   id: r.id,
   taskId: r.task_id,
-  author: r.author_user_id
-    ? { kind: "user", userId: r.author_user_id }
-    : { kind: "agent", agentId: r.author_agent_id ?? "unknown" },
+  // Both ids are null once the author (member or agent) is deleted: show them as a former member.
+  author: r.author_agent_id
+    ? { kind: "agent", agentId: r.author_agent_id }
+    : { kind: "user", userId: r.author_user_id ?? "deleted" },
   body: r.body,
   createdAt: iso(r.created_at),
 });
@@ -142,6 +170,8 @@ const UNIQUE_FIELDS: [constraint: string, field: string, message: string][] = [
   ["teams_slug_key", "slug", "This URL is already taken"],
   ["workspaces_team_id_key_prefix_key", "keyPrefix", "Another workspace already uses this prefix"],
   ["labels_team_name", "name", "A label with this name already exists"],
+  ["ai_agents_team_name", "name", "An AI teammate with this name already exists"],
+  ["agent_runs_one_active", "agent", "This AI teammate is already working on this task."],
 ];
 
 const RAISED: Record<string, () => Error> = {
@@ -154,6 +184,12 @@ const RAISED: Record<string, () => Error> = {
   label_not_in_team: () => new ConflictError("labelIds", "Unknown label"),
   parent_not_found: () => new NotFoundError("Task", "parentId"),
   assignee_not_member: () => new ConflictError("assignee", "That person isn't a member of this team"),
+  agent_not_found: () => new NotFoundError("Agent", "id"),
+  agents_require_pro: () => new ConflictError("plan", "AI teammates are part of the Pro plan."),
+  agent_not_assigned: () => new ConflictError("agent", AGENT_NOT_ASSIGNED),
+  agent_busy: () => new ConflictError("agent", AGENT_BUSY),
+  agent_daily_limit: () => new ConflictError("agent", AGENT_DAILY_LIMIT),
+  run_not_running: () => new NotFoundError("Run", "id"),
   not_owner: () => new ConflictError("owner", "Only the owner can transfer ownership"),
 };
 
@@ -578,6 +614,7 @@ export function createSupabaseRepositories(client: () => Promise<Client>): Repos
             p_description: input.description,
             p_priority: input.priority,
             p_assignee_user: input.assignee?.kind === "user" ? input.assignee.userId : null,
+            p_assignee_agent: input.assignee?.kind === "agent" ? input.assignee.agentId : null,
             p_label_ids: input.labelIds,
             p_due_date: input.dueDate,
             p_parent: input.parentId,
@@ -852,6 +889,69 @@ export function createSupabaseRepositories(client: () => Promise<Client>): Repos
           .gte("created_at", since.toISOString());
         if (error) throw toError(error);
         return count ?? 0;
+      },
+    },
+
+    agents: {
+      async listForTeam(teamId) {
+        const db = await client();
+        return data(await db.from("ai_agents").select("*").eq("team_id", teamId).order("name")).map(toAgent);
+      },
+      async get(id) {
+        const db = await client();
+        const row = maybe(await db.from("ai_agents").select("*").eq("id", id).maybeSingle());
+        return row ? toAgent(row) : null;
+      },
+      async create(teamId, { name, specialty, createdBy }) {
+        const db = await client();
+        return toAgent(
+          data(
+            await db
+              .from("ai_agents")
+              .insert({ team_id: teamId, name, specialty, created_by: createdBy })
+              .select("*")
+              .single(),
+          ),
+        );
+      },
+      async update(id, { name, specialty }) {
+        const db = await client();
+        return toAgent(data(await db.from("ai_agents").update({ name, specialty }).eq("id", id).select("*").single()));
+      },
+      async delete(id) {
+        const db = await client();
+        check(await db.from("ai_agents").delete().eq("id", id));
+      },
+    },
+
+    agentRuns: {
+      async start(taskId, agentId) {
+        const db = await client();
+        const id = data(await db.rpc("start_agent_run", { p_task: taskId, p_agent: agentId }));
+        return toAgentRun(data(await db.from("agent_runs").select("*").eq("id", id).single()));
+      },
+      async claim(runId) {
+        const db = await client();
+        return data(await db.rpc("claim_agent_run", { p_run: runId }));
+      },
+      async finish(runId, _userId, body) {
+        const db = await client();
+        return data(await db.rpc("finish_agent_run", { p_run: runId, p_body: body }));
+      },
+      async fail(runId, _userId, error) {
+        const db = await client();
+        check(await db.rpc("fail_agent_run", { p_run: runId, p_error: error }));
+      },
+      async get(id) {
+        const db = await client();
+        const row = maybe(await db.from("agent_runs").select("*").eq("id", id).maybeSingle());
+        return row ? toAgentRun(row) : null;
+      },
+      async listForTask(taskId) {
+        const db = await client();
+        return data(
+          await db.from("agent_runs").select("*").eq("task_id", taskId).order("created_at", { ascending: false }),
+        ).map(toAgentRun);
       },
     },
   };

@@ -7,7 +7,7 @@ import { FormError } from "@/components/forms/fields";
 import { useFormAction } from "@/components/forms/use-form-action";
 import { LabelChip, LabelDot } from "@/components/tasks/label-chip";
 import { Markdown } from "@/components/tasks/markdown";
-import { MemberAvatar, type MemberOption } from "@/components/tasks/member-avatar";
+import { MemberAvatar, type AgentOption, type MemberOption } from "@/components/tasks/member-avatar";
 import { PRIORITY_META, PriorityIcon } from "@/components/tasks/priority";
 import {
   AlertDialog,
@@ -32,14 +32,28 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import { PRIORITIES, type Column, type Comment, type Label, type Task, type UpdateTaskInput } from "@/lib/domain";
+import {
+  PRIORITIES,
+  type AgentRun,
+  type Column,
+  type Comment,
+  type Label,
+  type Task,
+  type UpdateTaskInput,
+} from "@/lib/domain";
+import { assigneeValue, parseAssigneeValue } from "@/lib/forms";
 import { addCommentAction, deleteCommentAction } from "@/server/actions/comments";
+import { AgentRuns } from "./agent-runs";
 import { BreakdownButton } from "./breakdown-dialog";
 
 type TaskSheetProps = {
   task: Task | undefined;
   /** The open task's sub-tasks, in board order. */
   subtasks: Task[];
+  agents: AgentOption[];
+  /** Whether agents can be newly assigned (Pro); existing assignments always show. */
+  canAssignAgents: boolean;
+  agentRuns: AgentRun[];
   aiEnabled: boolean;
   onOpenTask: (task: Task) => void;
   columns: Column[];
@@ -78,6 +92,9 @@ export function TaskSheet({ task, onClose, ...props }: TaskSheetProps) {
 function TaskSheetBody({
   task,
   subtasks,
+  agents,
+  canAssignAgents,
+  agentRuns,
   aiEnabled,
   onOpenTask,
   columns,
@@ -90,7 +107,9 @@ function TaskSheetBody({
   onMove,
   onDelete,
 }: Omit<TaskSheetProps, "task" | "onClose"> & { task: Task }) {
-  const assigneeId = task.assignee?.kind === "user" ? task.assignee.userId : "none";
+  const assigneeId = assigneeValue(task.assignee);
+  const agentId = task.assignee?.kind === "agent" ? task.assignee.agentId : undefined;
+  const assignedAgent = agentId ? agents.find((a) => a.id === agentId) : undefined;
 
   return (
     <>
@@ -139,19 +158,29 @@ function TaskSheetBody({
           <dd>
             <Select
               value={assigneeId}
-              onValueChange={(value) =>
-                onUpdate({ assignee: value === "none" ? null : { kind: "user", userId: value } })
-              }
+              onValueChange={(value) => onUpdate({ assignee: parseAssigneeValue(value) })}
             >
               <SelectTrigger size="sm" aria-label="Assignee">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="none">Unassigned</SelectItem>
+                {/* Keeps a former or off-plan AI assignee visible in the trigger. */}
+                {assignedAgent === undefined && agentId && (
+                  <SelectItem value={assigneeId} disabled>
+                    AI teammate (removed)
+                  </SelectItem>
+                )}
                 {members.map((member) => (
                   <SelectItem key={member.id} value={member.id}>
                     <MemberAvatar member={member} className="size-5" />
                     {member.name}
+                  </SelectItem>
+                ))}
+                {agents.map((agent) => (
+                  <SelectItem key={agent.id} value={`agent:${agent.id}`} disabled={!canAssignAgents && agent.id !== agentId}>
+                    <MemberAvatar member={{ name: agent.name, agent: true }} className="size-5" />
+                    {agent.name} (AI)
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -204,10 +233,13 @@ function TaskSheetBody({
           )}
         </section>
 
+        <AgentRuns taskId={task.id} assignedAgent={assignedAgent} runs={agentRuns} agents={agents} />
+
         <CommentsSection
           taskId={task.id}
           comments={comments}
           members={members}
+          agents={agents}
           currentUserId={currentUserId}
           canModerate={canModerate}
         />
@@ -324,12 +356,14 @@ function CommentsSection({
   taskId,
   comments,
   members,
+  agents,
   currentUserId,
   canModerate,
 }: {
   taskId: string;
   comments: Comment[];
   members: MemberOption[];
+  agents: AgentOption[];
   currentUserId: string;
   canModerate: boolean;
 }) {
@@ -342,12 +376,16 @@ function CommentsSection({
       {comments.length > 0 && (
         <ul className="space-y-3">
           {comments.map((comment) => {
-            const name = comment.author.kind === "user" ? memberName(comment.author.userId) : "AI teammate";
+            const author = comment.author;
+            const name =
+              author.kind === "user"
+                ? memberName(author.userId)
+                : agentLabel(agents, author.agentId);
             const isAuthor = comment.author.kind === "user" && comment.author.userId === currentUserId;
             return (
               <li key={comment.id} className="rounded-md border p-3">
                 <div className="flex items-center gap-2 text-xs">
-                  <MemberAvatar member={{ name }} className="size-5" />
+                  <MemberAvatar member={{ name, agent: author.kind === "agent" }} className="size-5" />
                   <span className="font-medium">{name}</span>
                   <time dateTime={comment.createdAt} className="text-muted-foreground" suppressHydrationWarning>
                     {new Date(comment.createdAt).toLocaleString()}
@@ -367,7 +405,8 @@ function CommentsSection({
                     </Button>
                   )}
                 </div>
-                <Markdown>{comment.body}</Markdown>
+                {/* AI output: no images (they would load on sight), links marked untrusted. */}
+                <Markdown untrusted={author.kind === "agent"}>{comment.body}</Markdown>
               </li>
             );
           })}
@@ -414,4 +453,9 @@ function DeleteTaskButton({ taskKey, onConfirm }: { taskKey: string; onConfirm: 
       </AlertDialogContent>
     </AlertDialog>
   );
+}
+
+function agentLabel(agents: AgentOption[], id: string) {
+  const agent = agents.find((a) => a.id === id);
+  return agent ? `${agent.name} (AI)` : "AI teammate (removed)";
 }

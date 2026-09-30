@@ -7,7 +7,7 @@ export const onboardingWorkspacePath = (teamSlug: string) => `${ONBOARDING_PATH}
 export const onboardingInvitePath = (teamSlug: string, boardId: string) =>
   `${ONBOARDING_PATH}/${teamSlug}/invite?board=${encodeURIComponent(boardId)}`;
 
-export type SettingsSection = "general" | "members" | "labels" | "profile" | "billing";
+export type SettingsSection = "general" | "members" | "labels" | "agents" | "profile" | "billing";
 export const settingsPath = (teamSlug: string, section: SettingsSection = "general") =>
   section === "general" ? `/${teamSlug}/settings` : `/${teamSlug}/settings/${section}`;
 export const invitePath = (token: string) => `/invite/${token}`;

@@ -22,6 +22,7 @@ const RULES = {
   "member:invite": MANAGERS,
   "team:update": MANAGERS,
   "label:manage": MANAGERS,
+  "agent:manage": MANAGERS,
   "team:delete": OWNER,
   "billing:manage": OWNER,
   "ownership:transfer": OWNER,

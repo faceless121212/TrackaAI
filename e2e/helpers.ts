@@ -89,7 +89,10 @@ export async function saved(page: Page) {
 }
 
 /** Opens a settings tab of the current team from the sidebar. */
-export async function openSettings(page: Page, tab: "General" | "Members" | "Labels" | "Profile" | "Billing") {
+export async function openSettings(
+  page: Page,
+  tab: "General" | "Members" | "Labels" | "AI teammates" | "Profile" | "Billing",
+) {
   await page.getByRole("link", { name: "Settings", exact: true }).click();
   await page.getByRole("navigation", { name: "Settings" }).getByRole("link", { name: tab }).click();
   await expect(page.getByRole("link", { name: tab, exact: true })).toHaveAttribute("aria-current", "page");

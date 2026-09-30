@@ -8,7 +8,7 @@ import { AiError, INCOMPLETE } from "@/components/ai/ai-error";
 import { FormError, SelectField } from "@/components/forms/fields";
 import { useFormAction } from "@/components/forms/use-form-action";
 import { LabelChip } from "@/components/tasks/label-chip";
-import type { MemberOption } from "@/components/tasks/member-avatar";
+import type { AgentOption, MemberOption } from "@/components/tasks/member-avatar";
 import { PRIORITY_META } from "@/components/tasks/priority";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -26,6 +26,7 @@ type CreateTaskDialogProps = {
   columns: Column[];
   members: MemberOption[];
   labels: Label[];
+  agents: AgentOption[];
   defaultColumnId: string;
   /** Whether the AI task writer is available on this server. */
   aiEnabled: boolean;
@@ -46,6 +47,7 @@ function CreateTaskForm({
   columns,
   members,
   labels,
+  agents,
   defaultColumnId,
   aiEnabled,
   onDone,
@@ -170,6 +172,7 @@ function CreateTaskForm({
             options={[
               { value: "none", label: "Unassigned" },
               ...members.map((member) => ({ value: member.id, label: member.name })),
+              ...agents.map((agent) => ({ value: `agent:${agent.id}`, label: `${agent.name} (AI)` })),
             ]}
           />
         </div>

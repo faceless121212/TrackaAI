@@ -14,7 +14,7 @@ type CardProps = {
   task: Task;
   href: string;
   labels: Label[];
-  assignee: MemberOption | undefined;
+  assignee: (Pick<MemberOption, "name" | "avatarUrl"> & { agent?: boolean }) | undefined;
 };
 
 export function TaskCardView({ task, href, labels, assignee, className }: CardProps & { className?: string }) {

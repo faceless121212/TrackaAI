@@ -7,6 +7,7 @@ import { seedDb } from "./mock/seed";
 import { createFileStore } from "./mock/store";
 import { createSupabaseRepositories } from "./supabase/repositories";
 import { createSupabaseServerClient } from "./supabase/server-client";
+import { createAccessTokenClient } from "./supabase/token-client";
 import type { Repositories } from "./types";
 
 // One instance per server process (survives dev hot reloads). The mock needs
@@ -29,6 +30,16 @@ function createRepositories(): Repositories {
 export function getRepositories(): Repositories {
   globalForRepos.__trackaRepos ??= createRepositories();
   return globalForRepos.__trackaRepos;
+}
+
+/**
+ * Repositories for background work after the response (see
+ * createAccessTokenClient). Call while the request is still open.
+ */
+export async function getBackgroundRepositories(): Promise<Repositories> {
+  if (resolveDataBackend(process.env.DATA_BACKEND) !== "supabase") return getRepositories();
+  const client = await createAccessTokenClient();
+  return createSupabaseRepositories(async () => client);
 }
 
 export type * from "./types";

@@ -1,4 +1,7 @@
 import type {
+  Agent,
+  AgentInput,
+  AgentRun,
   AiFeature,
   Board,
   Column,
@@ -195,6 +198,34 @@ export interface AiUsageRepo {
   countSince(teamId: string, since: Date): Promise<number>;
 }
 
+export interface AgentsRepo {
+  /** By name. */
+  listForTeam(teamId: string): Promise<Agent[]>;
+  get(id: string): Promise<Agent | null>;
+  /** Names are unique per team, ignoring case: ConflictError("name"). */
+  create(teamId: string, input: AgentInput & { createdBy: string }): Promise<Agent>;
+  update(id: string, input: AgentInput): Promise<Agent>;
+  /** Deletes the agent and its runs; its tasks become unassigned. */
+  delete(id: string): Promise<void>;
+}
+
+export interface AgentRunsRepo {
+  /**
+   * Queues a run of `agentId` on `taskId`, requested by `userId`. ConflictError
+   * if the task already has an active run or the team isn't on Pro.
+   */
+  start(taskId: string, agentId: string, userId: string): Promise<AgentRun>;
+  /** queued → running; false unless it's this user's queued run. */
+  claim(runId: string, userId: string): Promise<boolean>;
+  /** running → succeeded, posting `body` as the agent. Returns the comment id. */
+  finish(runId: string, userId: string, body: string): Promise<string>;
+  /** queued/running → failed. */
+  fail(runId: string, userId: string, error: string): Promise<void>;
+  get(id: string): Promise<AgentRun | null>;
+  /** Newest first. */
+  listForTask(taskId: string): Promise<AgentRun[]>;
+}
+
 export interface Repositories {
   auth: AuthRepo;
   users: UsersRepo;
@@ -207,4 +238,6 @@ export interface Repositories {
   labels: LabelsRepo;
   comments: CommentsRepo;
   aiUsage: AiUsageRepo;
+  agents: AgentsRepo;
+  agentRuns: AgentRunsRepo;
 }

@@ -135,6 +135,54 @@ describe("AI usage", () => {
   });
 });
 
+describe("AI teammates", () => {
+  async function proBoard() {
+    const setup = await setupBoard();
+    await repos.teams.setPlan(setup.team.id, "pro");
+    const task = await repos.tasks.create(taskInput(setup.board.id, setup.columns[0].id, "Write spec"));
+    const agent = await repos.agents.create(setup.team.id, { name: "Spec writer", specialty: "Specs", createdBy: owner.id });
+    return { ...setup, task, agent };
+  }
+
+  it("keeps agent names unique per team and unassigns tasks when an agent is deleted", async () => {
+    const { team, task, agent } = await proBoard();
+    await expect(
+      repos.agents.create(team.id, { name: "SPEC writer", specialty: "", createdBy: owner.id }),
+    ).rejects.toBeInstanceOf(ConflictError);
+    await repos.tasks.update(task.id, { assignee: { kind: "agent", agentId: agent.id } });
+    await repos.agents.delete(agent.id);
+    expect((await repos.tasks.get(task.id))?.assignee).toBeNull();
+    expect(await repos.agents.listForTeam(team.id)).toEqual([]);
+  });
+
+  it("runs a task once at a time, only for the requester, and posts as the agent", async () => {
+    const { team, task, agent } = await proBoard();
+    const mate = await joinTeam(team.id, "mate@example.test");
+    const run = await repos.agentRuns.start(task.id, agent.id, owner.id);
+    expect(run.status).toBe("queued");
+    await expect(repos.agentRuns.start(task.id, agent.id, owner.id)).rejects.toBeInstanceOf(ConflictError);
+    expect(await repos.agentRuns.claim(run.id, mate.id)).toBe(false);
+    expect(await repos.agentRuns.claim(run.id, owner.id)).toBe(true);
+    const commentId = await repos.agentRuns.finish(run.id, owner.id, "The spec.");
+    expect(await repos.comments.get(commentId)).toMatchObject({ body: "The spec.", author: { kind: "agent", agentId: agent.id } });
+    expect(await repos.agentRuns.get(run.id)).toMatchObject({ status: "succeeded", commentId });
+
+    const retry = await repos.agentRuns.start(task.id, agent.id, owner.id);
+    await repos.agentRuns.fail(retry.id, owner.id, "overloaded");
+    expect((await repos.agentRuns.listForTask(task.id)).map((r) => r.status)).toEqual(["failed", "succeeded"]);
+  });
+
+  it("requires Pro and the team's own agent", async () => {
+    const { team, task, agent } = await proBoard();
+    await repos.teams.setPlan(team.id, "lite");
+    await expect(repos.agentRuns.start(task.id, agent.id, owner.id)).rejects.toThrow(/Pro plan/);
+    await repos.teams.setPlan(team.id, "pro");
+    const other = await repos.teams.create({ name: "Other", slug: "other", ownerId: owner.id });
+    const stranger = await repos.agents.create(other.id, { name: "Bot", specialty: "", createdBy: owner.id });
+    await expect(repos.agentRuns.start(task.id, stranger.id, owner.id)).rejects.toBeInstanceOf(NotFoundError);
+  });
+});
+
 describe("memberships", () => {
   it("changes roles and removes members", async () => {
     const { team } = await setupBoard();

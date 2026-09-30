@@ -127,6 +127,24 @@ describe.skipIf(!url || !key)("Supabase repositories (live project)", () => {
     expect(await r.tasks.get(top.id)).toBeNull();
   });
 
+  it("runs an AI teammate on a task and posts its result as the agent", async () => {
+    const r = demo.repos;
+    const [workspace] = await r.workspaces.listForTeam(teamId);
+    const [board] = await r.boards.listForWorkspace(workspace.id);
+    const [column] = await r.boards.listColumns(board.id);
+    const task = await r.tasks.create(taskInput(board.id, column.id, "Needs a spec"));
+    const agent = await r.agents.create(teamId, { name: "Spec writer", specialty: "Specs", createdBy: demo.user.id });
+    await r.tasks.update(task.id, { assignee: { kind: "agent", agentId: agent.id } });
+
+    const run = await r.agentRuns.start(task.id, agent.id, demo.user.id);
+    await expect(r.agentRuns.start(task.id, agent.id, demo.user.id)).rejects.toBeInstanceOf(ConflictError);
+    expect(await r.agentRuns.claim(run.id, demo.user.id)).toBe(true);
+    const commentId = await r.agentRuns.finish(run.id, demo.user.id, "Here is the spec.");
+    expect(await r.comments.get(commentId)).toMatchObject({ author: { kind: "agent", agentId: agent.id } });
+    expect((await r.agentRuns.listForTask(task.id))[0]).toMatchObject({ status: "succeeded", commentId });
+    expect(await mate.repos.agents.listForTeam(teamId)).toEqual([]); // not a member (yet)
+  });
+
   it("keeps other teams' data invisible and untouchable", async () => {
     const r = demo.repos;
     const [workspace] = await r.workspaces.listForTeam(teamId);

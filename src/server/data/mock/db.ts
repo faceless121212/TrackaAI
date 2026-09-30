@@ -1,4 +1,6 @@
 import type {
+  Agent,
+  AgentRun,
   Board,
   Column,
   Comment,
@@ -27,6 +29,8 @@ export type MockDb = {
   labels: Label[];
   comments: Comment[];
   aiUsage: AiUsageRow[];
+  agents: Agent[];
+  agentRuns: AgentRun[];
 };
 
 export function emptyDb(): MockDb {
@@ -44,5 +48,7 @@ export function emptyDb(): MockDb {
     labels: [],
     comments: [],
     aiUsage: [],
+    agents: [],
+    agentRuns: [],
   };
 }

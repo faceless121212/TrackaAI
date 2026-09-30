@@ -19,6 +19,26 @@ export type Database = {
       profiles: Table<{ avatar_url: string | null; created_at: string; email: string; id: string; name: string; theme: string | null }, { avatar_url?: string | null; created_at?: string; email: string; id: string; name: string; theme?: string | null }>;
       task_labels: Table<{ label_id: string; task_id: string }, { label_id: string; task_id: string }>;
       tasks: Table<{ assignee_agent_id: string | null; assignee_user_id: string | null; board_id: string; column_id: string; created_at: string; created_by: string; description: string; due_date: string | null; id: string; key: string; number: number; parent_id: string | null; position: string; priority: string; title: string; updated_at: string }, { assignee_agent_id?: string | null; assignee_user_id?: string | null; board_id: string; column_id: string; created_at?: string; created_by: string; description?: string; due_date?: string | null; id?: string; key: string; number: number; parent_id?: string | null; position: string; priority?: string; title: string; updated_at?: string }>;
+      ai_agents: Table<
+        { id: string; team_id: string; name: string; specialty: string; created_by: string | null; created_at: string },
+        { team_id: string; name: string; specialty?: string; created_by: string }
+      >;
+      agent_runs: Table<
+        {
+          id: string;
+          team_id: string;
+          task_id: string;
+          agent_id: string;
+          requested_by: string | null;
+          status: string;
+          error: string | null;
+          comment_id: string | null;
+          created_at: string;
+          started_at: string | null;
+          finished_at: string | null;
+        },
+        { team_id: string; task_id: string; agent_id: string; requested_by: string }
+      >;
       ai_usage: Table<
         {
           id: string;
@@ -75,6 +95,22 @@ export type Database = {
       set_team_plan: {
         Args: { p_team: string; p_plan: string; p_actor?: string };
         Returns: Database["public"]["Tables"]["teams"]["Row"];
+      };
+      start_agent_run: {
+        Args: { p_task: string; p_agent: string; p_actor?: string };
+        Returns: string;
+      };
+      claim_agent_run: {
+        Args: { p_run: string; p_actor?: string };
+        Returns: boolean;
+      };
+      finish_agent_run: {
+        Args: { p_run: string; p_body: string; p_actor?: string };
+        Returns: string;
+      };
+      fail_agent_run: {
+        Args: { p_run: string; p_error: string; p_actor?: string };
+        Returns: undefined;
       };
       start_ai_run: {
         Args: { p_team: string; p_feature: string; p_model: string; p_actor?: string };

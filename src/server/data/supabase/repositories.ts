@@ -102,13 +102,15 @@ const BOARD_PATH = "workspaces!inner(*, teams!inner(*, memberships!inner(*)))";
 type WorkspacePath = Row<"workspaces"> & { teams: Row<"teams"> & { memberships: Row<"memberships">[] } };
 type BoardPath = Row<"boards"> & { workspaces: WorkspacePath };
 
-function fromWorkspacePath(w: WorkspacePath) {
-  const membership = w.teams.memberships[0];
+// The query already filters memberships to `userId`; checking again means a
+// broken filter can never hand back someone else's role.
+function fromWorkspacePath(w: WorkspacePath, userId: string) {
+  const membership = w.teams.memberships.find((m) => m.user_id === userId);
   return membership ? { team: toTeam(w.teams), membership: toMembership(membership), workspace: toWorkspace(w) } : null;
 }
 
-function fromBoardPath(b: BoardPath) {
-  const access = fromWorkspacePath(b.workspaces);
+function fromBoardPath(b: BoardPath, userId: string) {
+  const access = fromWorkspacePath(b.workspaces, userId);
   return access ? { ...access, board: toBoard(b) } : null;
 }
 
@@ -686,23 +688,24 @@ export function createSupabaseRepositories(client: () => Promise<Client>): Repos
           changes.assignee_agent_id = patch.assignee?.kind === "agent" ? patch.assignee.agentId : null;
         }
         // Always write the row (even for label-only edits) so updated_at moves and RLS is checked.
-        const row = data(await db.from("tasks").update(changes).eq("id", id).select("*").single());
-        if (patch.labelIds !== undefined) {
-          check(await db.from("task_labels").delete().eq("task_id", id));
-          if (patch.labelIds.length > 0) {
-            check(await db.from("task_labels").insert(patch.labelIds.map((labelId) => ({ task_id: id, label_id: labelId }))));
-          }
+        const [updated] = await selectTasks((select) => db.from("tasks").update(changes).eq("id", id).select(select).single());
+        if (patch.labelIds === undefined) return updated;
+        check(await db.from("task_labels").delete().eq("task_id", id));
+        if (patch.labelIds.length > 0) {
+          check(await db.from("task_labels").insert(patch.labelIds.map((labelId) => ({ task_id: id, label_id: labelId }))));
         }
-        return (await withLabels(db, [row]))[0];
+        return { ...updated, labelIds: patch.labelIds };
       },
       async move(id, { columnId, index }) {
         const db = await client();
-        const task = data(await db.from("tasks").select("board_id").eq("id", id).single());
-        const column = maybe(
-          await db.from("columns").select("id").eq("id", columnId).eq("board_id", task.board_id).maybeSingle(),
-        );
-        if (!column) throw new NotFoundError("Column", columnId);
-        const position = positionAt(await columnTaskPositions(db, columnId, id), index);
+        // The three reads don't depend on each other, so they run at once.
+        const [task, column, positions] = await Promise.all([
+          db.from("tasks").select("board_id").eq("id", id).single().then(data),
+          db.from("columns").select("board_id").eq("id", columnId).maybeSingle().then(maybe),
+          columnTaskPositions(db, columnId, id),
+        ]);
+        if (!column || column.board_id !== task.board_id) throw new NotFoundError("Column", columnId);
+        const position = positionAt(positions, index);
         const [moved] = await selectTasks((select) =>
           db.from("tasks").update({ column_id: columnId, position }).eq("id", id).select(select).single(),
         );
@@ -970,7 +973,7 @@ export function createSupabaseRepositories(client: () => Promise<Client>): Repos
         const row = maybe(
           await db.from("teams").select("*, memberships!inner(*)").eq("slug", slug).eq("memberships.user_id", userId).maybeSingle(),
         ) as unknown as (Row<"teams"> & { memberships: Row<"memberships">[] }) | null;
-        const membership = row?.memberships[0];
+        const membership = row?.memberships.find((m) => m.user_id === userId);
         return row && membership ? { team: toTeam(row), membership: toMembership(membership) } : null;
       },
       async workspace(id, userId) {
@@ -983,7 +986,7 @@ export function createSupabaseRepositories(client: () => Promise<Client>): Repos
             .eq("teams.memberships.user_id", userId)
             .maybeSingle(),
         ) as unknown as WorkspacePath | null;
-        return row ? fromWorkspacePath(row) : null;
+        return row ? fromWorkspacePath(row, userId) : null;
       },
       async board(id, userId) {
         const db = await client();
@@ -995,7 +998,7 @@ export function createSupabaseRepositories(client: () => Promise<Client>): Repos
             .eq("workspaces.teams.memberships.user_id", userId)
             .maybeSingle(),
         ) as unknown as BoardPath | null;
-        return row ? fromBoardPath(row) : null;
+        return row ? fromBoardPath(row, userId) : null;
       },
       async column(id, userId) {
         const db = await client();
@@ -1007,7 +1010,7 @@ export function createSupabaseRepositories(client: () => Promise<Client>): Repos
             .eq("boards.workspaces.teams.memberships.user_id", userId)
             .maybeSingle(),
         ) as unknown as (Row<"columns"> & { boards: BoardPath }) | null;
-        const access = row && fromBoardPath(row.boards);
+        const access = row && fromBoardPath(row.boards, userId);
         return access ? { ...access, column: toColumn(row) } : null;
       },
       async task(id, userId) {
@@ -1020,7 +1023,7 @@ export function createSupabaseRepositories(client: () => Promise<Client>): Repos
             .eq("boards.workspaces.teams.memberships.user_id", userId)
             .maybeSingle(),
         ) as unknown as (TaskWithLabels & { boards: BoardPath }) | null;
-        const access = row && fromBoardPath(row.boards);
+        const access = row && fromBoardPath(row.boards, userId);
         return access ? { ...access, task: fromTaskWithLabels(row) } : null;
       },
     },

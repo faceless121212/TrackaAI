@@ -165,6 +165,10 @@ describe.skipIf(!url || !key)("Supabase repositories (live project)", () => {
     expect(await mate.repos.access.team(slug, mate.user.id)).toBeNull();
     expect(await mate.repos.access.task(task.id, mate.user.id)).toBeNull();
     expect(await mate.repos.access.board(board.id, demo.user.id)).toBeNull(); // RLS hides it from mate's session
+    // With a session that can see the rows, a non-member id still gets nothing (the filter, not RLS).
+    expect(await r.access.team(slug, mate.user.id)).toBeNull();
+    expect(await r.access.board(board.id, mate.user.id)).toBeNull();
+    expect(await r.access.task(task.id, mate.user.id)).toBeNull();
   });
 
   it("keeps other teams' data invisible and untouchable", async () => {

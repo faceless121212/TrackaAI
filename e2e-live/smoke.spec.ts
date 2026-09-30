@@ -1,7 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
 
 // Every main feature once, on the live backend. Timings are logged per step.
-const DEMO = { email: "demo@trackaai.test", password: "demo-password" };
+// Defaults are the development seed (supabase/seed.sql). Never seed a public deployment with them.
+const DEMO = {
+  email: process.env.SMOKE_EMAIL ?? "demo@trackaai.test",
+  password: process.env.SMOKE_PASSWORD ?? "demo-password",
+};
 const id = Date.now().toString(36);
 const title = `Smoke ${id}`;
 
@@ -10,6 +14,14 @@ async function timed<T>(label: string, step: () => Promise<T>): Promise<T> {
   const result = await step();
   console.log(`${label.padEnd(44)} ${Date.now() - started} ms`);
   return result;
+}
+
+async function cleanUp(label: string, step: () => Promise<void>) {
+  try {
+    await timed(label, step);
+  } catch (error) {
+    console.warn(`${label} failed; remove it by hand:`, error instanceof Error ? error.message : error);
+  }
 }
 
 const column = (page: Page, name: string) => page.getByRole("region", { name, exact: true });
@@ -140,27 +152,25 @@ test("TrackaAI works end to end on the live backend", async ({ page }) => {
     });
 
   } finally {
-    // Best effort: remove whatever this run created, even after a failure.
-    await timed("clean up (task, AI teammate)", async () => {
-      const home = boardUrl || "/acme";
-      await page.keyboard.press("Escape").catch(() => undefined);
-      if (boardUrl) {
-        await page.goto(boardUrl);
-        const link = page.getByRole("link", { name: title });
-        if (await link.count()) {
-          await link.click();
-          await sheet.getByRole("button", { name: "Delete task" }).click();
-          await page.getByRole("alertdialog").getByRole("button", { name: "Delete" }).click();
-          await expect(page.getByRole("link", { name: title })).toHaveCount(0);
-        }
-      }
+    // Best effort: each cleanup runs on its own and never hides the real failure.
+    const home = boardUrl || "/acme";
+    await cleanUp("clean up: task", async () => {
+      if (!boardUrl) return;
+      await page.goto(boardUrl);
+      const link = page.getByRole("link", { name: title });
+      if (!(await link.count())) return;
+      await link.click();
+      await sheet.getByRole("button", { name: "Delete task" }).click();
+      await page.getByRole("alertdialog").getByRole("button", { name: "Delete" }).click();
+      await expect(page.getByRole("link", { name: title })).toHaveCount(0);
+    });
+    await cleanUp("clean up: AI teammate", async () => {
       await page.goto(home.replace(/\/board\/.*/, "/settings/agents"));
       const remove = page.getByRole("button", { name: `Remove Smoke bot ${id}` });
-      if (await remove.count()) {
-        await remove.click();
-        await page.getByRole("alertdialog").getByRole("button", { name: "Remove" }).click();
-        await expect(page.getByText(`Smoke bot ${id}`)).toHaveCount(0);
-      }
+      if (!(await remove.count())) return;
+      await remove.click();
+      await page.getByRole("alertdialog").getByRole("button", { name: "Remove" }).click();
+      await expect(page.getByText(`Smoke bot ${id}`)).toHaveCount(0);
     });
   }
 

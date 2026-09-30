@@ -15519,10 +15519,8 @@ Also:
 - Pressing C right after closing a panel now works.
 - The copilot is hidden when the server has no `TOOL_APPROVAL_SECRET` in production.
 
-Gotcha: `loading.tsx` skeletons were tried and removed. With any of them present (even the board's), Next 16 sometimes dropped a server action's `refresh()` update to the shared layout, e.g. the sidebar kept the old team name after a rename, and three e2e tests failed consistently. Correct data matters more than a skeleton, and pages are now fast.
+Gotchas:
+- `getClaims()` verifies the token locally, so "sign out everywhere", a ban or a password reset only takes effect in the app when the access token expires (1 h by default). Team membership is still checked in the database on every request, so removing someone from a team is immediate. If sensitive actions need it later, call `getUser()` there or shorten the JWT expiry.
+- `loading.tsx` skeletons were tried and removed. With any of them present (even the board's), Next 16 sometimes dropped a server action's `refresh()` update to the shared layout, e.g. the sidebar kept the old team name after a rename, and three e2e tests failed consistently. Correct data matters more than a skeleton, and pages are now fast.
 
 Next in M10: error and empty states, an accessibility pass, rate limits, a background worker (service role) for AI teammate runs, and deploying to Vercel with production settings.
-
-## Next up: M10
-
-Hardening & launch, once M9 is merged.

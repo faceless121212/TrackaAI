@@ -3,6 +3,12 @@ import { randomBytes } from "node:crypto";
 
 const globalForSecret = globalThis as typeof globalThis & { __toolApprovalSecret?: string };
 
+/** Whether toolApprovalSecret() will return a secret (without logging). */
+export function approvalSecretConfigured(): boolean {
+  const configured = process.env.TOOL_APPROVAL_SECRET;
+  return (configured !== undefined && configured.length >= 32) || process.env.NODE_ENV !== "production";
+}
+
 /**
  * Signs copilot tool approvals, so a client can't send back a forged
  * "approved" in the chat history. Production needs TOOL_APPROVAL_SECRET (at
@@ -10,12 +16,6 @@ const globalForSecret = globalThis as typeof globalThis & { __toolApprovalSecret
  * break approvals across instances and restarts. Elsewhere each process makes
  * its own. Returns null when production isn't configured.
  */
-/** Whether toolApprovalSecret() will return a secret (without logging). */
-export function approvalSecretConfigured(): boolean {
-  const configured = process.env.TOOL_APPROVAL_SECRET;
-  return (configured !== undefined && configured.length >= 32) || process.env.NODE_ENV !== "production";
-}
-
 export function toolApprovalSecret(): string | null {
   const configured = process.env.TOOL_APPROVAL_SECRET;
   if (configured && configured.length >= 32) return configured;

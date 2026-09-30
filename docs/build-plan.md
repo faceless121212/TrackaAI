@@ -17,7 +17,7 @@ This file holds the detailed, task-level plan for the **current** milestone. Eac
 | M6 — Plans & billing (simulated) | ✅ Done |
 | M7 — AI I: task writer & breakdown | ✅ Done |
 | M8 — AI II: board copilot | ✅ Done |
-| M9 — AI III: AI teammate | — |
+| M9 — AI III: AI teammate | 🚧 In progress |
 | M10 — Hardening & launch | — |
 
 ---
@@ -15458,6 +15458,27 @@ Gotchas:
    - The chat survives closing the panel, and there is a "New chat" button.
 7. Each approval continuation is a new request, so one approved change reserves two AI runs (unlimited on Pro; it shows in `ai_usage`).
 
-## Next up: M9
+---
 
-AI teammate (assignable agent members and background runs), once M8 is merged.
+# M9 — AI III: AI teammate — Plan
+
+**Goal:** On Pro, managers add AI teammates (a name and a specialty, e.g. "Spec writer: turns tasks into specs"). Anyone can assign a task to one. Assigning queues a run: the teammate reads the task (and its recent comments), writes its result as a comment, and moves the task to **In Review** for a human. The task sheet shows run history, a live "working" state and **Retry** for failed runs.
+
+**Architecture:**
+- Tables: `ai_agents` (team-scoped; managers create, rename and delete) and `agent_runs` (queued → running → succeeded | failed; at most one active run per task).
+- `tasks.assignee_agent_id` and `comments.author_agent_id` get foreign keys; the task-refs trigger checks the agent is in the task's team.
+- Runs change state only through SECURITY DEFINER functions: `start_agent_run` (Pro only), `claim_agent_run`, `finish_agent_run` (inserts the agent-authored comment) and `fail_agent_run`. Each checks the caller is the member who requested the run. Nobody can post as an agent directly.
+- Worker: assigning a task to an agent (the task sheet, or the copilot's assign tool later) starts a run, and `after()` runs it with the requester's session. The model is `claude-sonnet-5` with plain Markdown output, and the task text is treated as data. The run is metered in `ai_usage` (feature `agent`). A queue or cron can replace `after()` later.
+- The client refreshes while a run is active (polling every few seconds), so the comment and the move show up without a reload.
+
+**Tasks:**
+1. Migration + PGlite tests (tables, RLS, FKs, trigger, run functions, usage feature).
+2. Domain types and repositories (`agents`, `agentRuns`) in mock and Supabase.
+3. The runner (`src/server/ai/agent/run.ts`), tested with the mock repositories and a mock model.
+4. Actions: manage agents (settings, managers, Pro), start a run on assignment, retry.
+5. UI: **Settings → AI teammates**; agents in the assignee pickers and on cards; comment authors; run history, working state and Retry in the task sheet.
+6. E2E (mock model), one live run, docs, pre-PR review → PR → auto-merge.
+
+## Next up: M10
+
+Hardening & launch, once M9 is merged.

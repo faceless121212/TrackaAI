@@ -152,7 +152,11 @@ export function BoardView(props: BoardViewProps) {
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (event.key.toLowerCase() !== "c" || event.metaKey || event.ctrlKey || event.altKey) return;
-      if (isTyping(event.target) || document.querySelector("[role=dialog], [role=alertdialog]")) return;
+      // Only open dialogs count: a closing one stays in the DOM while it animates out.
+      const dialogOpen = document.querySelector(
+        '[role=dialog]:not([data-state=closed]), [role=alertdialog]:not([data-state=closed])',
+      );
+      if (isTyping(event.target) || dialogOpen) return;
       event.preventDefault();
       setCreateOpen(true);
     }

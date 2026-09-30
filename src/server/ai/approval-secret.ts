@@ -10,6 +10,12 @@ const globalForSecret = globalThis as typeof globalThis & { __toolApprovalSecret
  * break approvals across instances and restarts. Elsewhere each process makes
  * its own. Returns null when production isn't configured.
  */
+/** Whether toolApprovalSecret() will return a secret (without logging). */
+export function approvalSecretConfigured(): boolean {
+  const configured = process.env.TOOL_APPROVAL_SECRET;
+  return (configured !== undefined && configured.length >= 32) || process.env.NODE_ENV !== "production";
+}
+
 export function toolApprovalSecret(): string | null {
   const configured = process.env.TOOL_APPROVAL_SECRET;
   if (configured && configured.length >= 32) return configured;

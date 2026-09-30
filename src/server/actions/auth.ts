@@ -5,7 +5,7 @@ import { z } from "zod";
 import { AUTH_CALLBACK_PATH, CHECK_EMAIL_PATH, SIGN_IN_PATH, safeNextPath, withNext } from "@/lib/auth/routes";
 import { signInInputSchema, signUpInputSchema } from "@/lib/domain";
 import { formValues, type FormState } from "@/lib/forms";
-import { ONBOARDING_PATH } from "@/lib/paths";
+import { ONBOARDING_PATH, teamPath } from "@/lib/paths";
 import { ConflictError, getRepositories } from "@/server/data";
 import { absoluteUrl } from "./shared";
 
@@ -47,7 +47,11 @@ export async function signInAction(_prev: FormState, formData: FormData): Promis
     throw error;
   }
   if (!user) return { formError: "Invalid email or password.", values: echo };
-  redirect(safeNextPath(values.next));
+  const next = safeNextPath(values.next);
+  if (next !== "/") redirect(next);
+  // Straight to the first team (skips the extra redirect "/" would make).
+  const [team] = await getRepositories().teams.listForUser(user.id);
+  redirect(team ? teamPath(team.slug) : ONBOARDING_PATH);
 }
 
 export async function signOutAction() {

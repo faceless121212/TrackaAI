@@ -7,6 +7,7 @@ import { settingsPath } from "@/lib/paths";
 import { requireTeamMember } from "@/server/auth/guards";
 import { requireUserId } from "@/server/auth/session";
 import { can } from "@/server/auth/permissions";
+import { approvalSecretConfigured } from "@/server/ai/approval-secret";
 import { aiAvailable } from "@/server/ai/model";
 import { supabaseConfig } from "@/lib/supabase/config";
 import { getRepositories } from "@/server/data";
@@ -74,7 +75,8 @@ export default async function BoardPage({ params, searchParams }: PageProps<"/[t
 }
 
 function copilotAccess(team: Team, role: Role): CopilotAccess | null {
-  if (!aiAvailable()) return null;
+  // Hidden until the server can run it (AI key, and a signing secret in production).
+  if (!aiAvailable() || !approvalSecretConfigured()) return null;
   if (PLAN_CATALOG[team.plan].features.copilot) return { status: "on" };
   return can(role, "billing:manage")
     ? { status: "upgrade", message: "The board copilot is part of the Pro plan.", upgradeHref: settingsPath(team.slug, "billing") }

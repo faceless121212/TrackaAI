@@ -27,3 +27,27 @@ export function jsonStreamModel(json: string, usage = { input: 100, output: 50 }
     }),
   });
 }
+
+/** A model that answers `text` in one go (generateText), for e2e runs and tests. */
+export function textModel(text: string, usage = { input: 300, output: 120 }): LanguageModel {
+  return new MockLanguageModelV4({
+    doGenerate: async () => ({
+      content: [{ type: "text", text }],
+      finishReason: { unified: "stop", raw: undefined },
+      usage: {
+        inputTokens: { total: usage.input, noCache: usage.input, cacheRead: undefined, cacheWrite: undefined },
+        outputTokens: { total: usage.output, text: usage.output, reasoning: undefined },
+      },
+      warnings: [],
+    }),
+  });
+}
+
+/** A model whose every call fails, for testing error paths. */
+export function failingModel(message: string): LanguageModel {
+  return new MockLanguageModelV4({
+    doGenerate: async () => {
+      throw new Error(message);
+    },
+  });
+}

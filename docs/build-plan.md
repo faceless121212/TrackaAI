@@ -18,7 +18,7 @@ This file holds the detailed, task-level plan for the **current** milestone. Eac
 | M7 — AI I: task writer & breakdown | ✅ Done |
 | M8 — AI II: board copilot | ✅ Done |
 | M9 — AI III: AI teammate | ✅ Done |
-| M10 — Hardening & launch | — |
+| M10 — Hardening & launch | 🚧 In progress (speed pass done) |
 
 ---
 
@@ -15500,6 +15500,28 @@ Gotchas:
    - A finishing run re-reads the task: if it was reassigned it posts nothing, and if someone moved it the task stays where they put it.
    - Agent comments render as untrusted Markdown (no images, `nofollow` links).
    - A run that can't start after an assignment is a warning, not an error; reassigning during a run is refused up front.
+
+# M10 — Hardening & launch — Part 1: speed
+
+The app felt slow on the hosted Supabase project. Each round trip is ~60–80 ms, and the board page made about 20 of them, many one after another (~0.9 s per page, and the same again after every save).
+
+Changes:
+- **Local session checks:** `getClaims()` (ES256, keys cached per process) instead of `getUser()` in the proxy and pages, which removes two auth round trips from every request.
+- **Embedded selects:** tasks with their labels, members with their profiles, the user's teams, workspaces with their boards, and "assigned to me" each load in one request.
+- **One-lookup access checks:** `repos.access.*` resolves task → board → workspace → team → the caller's membership in one query. The guards run it in parallel with loading the profile, so every server action saves 4–5 round trips.
+- **Parallel reads:** the board page loads in two rounds of parallel reads; the home page batches columns.
+- **Sign-in** redirects straight to the first team.
+
+Result (production build, warm): board ~150 ms, settings ~140 ms, home ~300 ms. The dev server is slower than that because it compiles pages on demand.
+
+Also:
+- `pnpm test:smoke` is a live end-to-end pass over every feature, AI included. It is green, and every page is under 0.4 s.
+- Pressing C right after closing a panel now works.
+- The copilot is hidden when the server has no `TOOL_APPROVAL_SECRET` in production.
+
+Gotcha: `loading.tsx` skeletons were tried and removed. With any of them present (even the board's), Next 16 sometimes dropped a server action's `refresh()` update to the shared layout, e.g. the sidebar kept the old team name after a rename, and three e2e tests failed consistently. Correct data matters more than a skeleton, and pages are now fast.
+
+Next in M10: error and empty states, an accessibility pass, rate limits, a background worker (service role) for AI teammate runs, and deploying to Vercel with production settings.
 
 ## Next up: M10
 

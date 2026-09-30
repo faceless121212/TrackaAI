@@ -71,8 +71,10 @@ export type BoardViewProps = {
   realtime: RealtimeConfig;
   /** Whether the AI task writer and breakdown are available. */
   aiEnabled: boolean;
-  /** The team's AI teammates (assignable on Pro). */
+  /** The team's AI teammates. */
   agents: AgentOption[];
+  /** Whether AI teammates can be newly assigned (Pro). */
+  canAssignAgents: boolean;
   /** The open task's AI teammate runs, newest first. */
   agentRuns: AgentRun[];
   /** The board copilot: on (Pro), an upgrade note, or hidden (null: AI not set up). */
@@ -142,6 +144,7 @@ export function BoardView(props: BoardViewProps) {
       optimistic();
       const result = await action();
       if (!result.ok) toast.error(result.error);
+      else if (result.warning) toast.warning(result.warning);
     });
   }
 
@@ -382,7 +385,7 @@ export function BoardView(props: BoardViewProps) {
         columns={columns}
         members={members}
         labels={labels}
-        agents={props.agents}
+        agents={props.canAssignAgents ? props.agents : []}
         defaultColumnId={defaultColumnId}
         aiEnabled={props.aiEnabled}
       />
@@ -390,6 +393,7 @@ export function BoardView(props: BoardViewProps) {
         task={openTask}
         subtasks={openTask ? tasks.filter((task) => task.parentId === openTask.id) : []}
         agents={props.agents}
+        canAssignAgents={props.canAssignAgents}
         agentRuns={props.agentRuns}
         aiEnabled={props.aiEnabled}
         onOpenTask={(task) => replaceParams((params) => params.set("task", task.key))}
@@ -410,5 +414,5 @@ export function BoardView(props: BoardViewProps) {
 
 function agentAvatar(agents: AgentOption[], id: string) {
   const agent = agents.find((a) => a.id === id);
-  return { name: agent ? `${agent.name} (AI)` : "AI teammate", agent: true };
+  return { name: agent ? `${agent.name} (AI)` : "AI teammate (removed)", agent: true };
 }

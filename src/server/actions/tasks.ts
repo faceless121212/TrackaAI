@@ -1,12 +1,18 @@
 "use server";
 
 import { refresh } from "next/cache";
-import { createSubtasksInputSchema, createTaskInputSchema, updateTaskInputSchema, type UpdateTaskInput } from "@/lib/domain";
-import { formValues, parseAssigneeValue, type ActionResult, type FormState } from "@/lib/forms";
+import {
+  createSubtasksInputSchema,
+  createTaskInputSchema,
+  isActiveRun,
+  updateTaskInputSchema,
+  type UpdateTaskInput,
+} from "@/lib/domain";
+import { assigneeValue, formValues, parseAssigneeValue, type ActionResult, type FormState } from "@/lib/forms";
 import { requireBoardAccess, requireColumnAccess, requireTaskAccess } from "@/server/auth/guards";
 import { assertCan } from "@/server/auth/permissions";
 import { getRepositories } from "@/server/data";
-import { assertAgentsAvailable, queueAgentRun } from "@/server/ai/agent/queue";
+import { assertAgentsAvailable, startAgentRun } from "@/server/ai/agent/queue";
 import { assertTaskRefs, conflictToFormState, toActionError, zodToFormState } from "./shared";
 
 export async function createTaskAction(_prev: FormState, formData: FormData): Promise<FormState> {
@@ -24,18 +30,19 @@ export async function createTaskAction(_prev: FormState, formData: FormData): Pr
   });
   if (!parsed.success) return zodToFormState(parsed.error, values);
 
+  let warning: string | undefined;
   try {
     await assertTaskRefs(team.id, parsed.data);
     const agent = parsed.data.assignee?.kind === "agent" ? parsed.data.assignee.agentId : null;
     if (agent) assertAgentsAvailable(team);
     const task = await getRepositories().tasks.create({ ...parsed.data, createdBy: user.id });
-    // Assigning an AI teammate puts it to work.
-    if (agent) await queueAgentRun(task.id, agent, user.id);
+    // Assigning an AI teammate puts it to work (the task exists either way).
+    if (agent) warning = await startAgentRun(task.id, agent, user.id);
   } catch (error) {
     return conflictToFormState(error, values);
   }
   refresh();
-  return { ok: true };
+  return { ok: true, warning };
 }
 
 /** Quick-add from the top of a column: title only, inserted first. */
@@ -58,20 +65,23 @@ export async function updateTaskAction(taskId: string, patch: UpdateTaskInput): 
     assertCan(membership.role, "task:update");
     const parsed = updateTaskInputSchema.parse(patch);
     await assertTaskRefs(team.id, parsed);
+    const repos = getRepositories();
     const next = parsed.assignee;
-    const newAgent =
-      next?.kind === "agent" && !(task.assignee?.kind === "agent" && task.assignee.agentId === next.agentId)
-        ? next.agentId
-        : null;
+    const changesAssignee =
+      next !== undefined && assigneeValue(next) !== assigneeValue(task.assignee);
+    if (changesAssignee && (await repos.agentRuns.listForTask(taskId)).some(isActiveRun)) {
+      return { ok: false, error: "An AI teammate is working on this task. Wait for it to finish, then reassign." };
+    }
+    const newAgent = changesAssignee && next?.kind === "agent" ? next.agentId : null;
     if (newAgent) assertAgentsAvailable(team);
-    await getRepositories().tasks.update(taskId, parsed);
-    // Assigning an AI teammate puts it to work.
-    if (newAgent) await queueAgentRun(taskId, newAgent, user.id);
+    await repos.tasks.update(taskId, parsed);
+    // Assigning an AI teammate puts it to work (the assignment stands either way).
+    const warning = newAgent ? await startAgentRun(taskId, newAgent, user.id) : undefined;
+    refresh();
+    return { ok: true, warning };
   } catch (error) {
     return toActionError(error);
   }
-  refresh();
-  return { ok: true };
 }
 
 /** Moves a task to `index` among the other tasks of `columnId` (see indexInFullList). */

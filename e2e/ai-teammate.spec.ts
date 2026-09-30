@@ -32,6 +32,18 @@ test("an AI teammate works on an assigned task, comments and hands it to review"
 
   await page.keyboard.press("Escape");
   await expect(column(page, "In Review")).toContainText("Spec the CSV export");
+
+  // Assigning in the create dialog starts a run too.
+  await page.keyboard.press("c");
+  const dialog = page.getByRole("dialog", { name: "New task" });
+  await dialog.getByLabel("Title", { exact: true }).fill("Plan the beta launch");
+  await dialog.getByRole("combobox", { name: "Assignee" }).click();
+  await page.getByRole("option", { name: "Spec writer (AI)" }).click();
+  await dialog.getByRole("button", { name: "Create task" }).click();
+  await page.getByRole("link", { name: "Plan the beta launch" }).click();
+  const second = page.getByRole("dialog", { name: "Plan the beta launch" });
+  await expect(second.getByRole("combobox", { name: "Assignee" })).toHaveText(/Spec writer \(AI\)/);
+  await expect(second.getByRole("region", { name: "AI teammate" }).getByText("Done")).toBeVisible({ timeout: 20_000 });
 });
 
 test("on Free, AI teammates are explained as part of Pro", async ({ page }) => {

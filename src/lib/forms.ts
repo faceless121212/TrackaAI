@@ -4,6 +4,8 @@ export type FormState = {
   ok?: boolean;
   fieldErrors?: Partial<Record<string, string[]>>;
   formError?: string;
+  /** Set with ok: it worked, but something the user should know didn't (e.g. an AI run couldn't start). */
+  warning?: string;
   /** Set when a plan limit blocked the action: where to upgrade. */
   upgradeHref?: string;
   /** Echoed back so inputs keep their values after a failed submit. */
@@ -13,7 +15,7 @@ export type FormState = {
 export const initialFormState: FormState = {};
 
 /** Result of a server action called from an event handler (drag, select, delete…). */
-export type ActionResult = { ok: true } | { ok: false; error: string };
+export type ActionResult = { ok: true; warning?: string } | { ok: false; error: string };
 
 export function formValues<K extends string>(formData: FormData, keys: readonly K[]): Record<K, string> {
   return Object.fromEntries(keys.map((key) => [key, formData.get(key)?.toString() ?? ""])) as Record<

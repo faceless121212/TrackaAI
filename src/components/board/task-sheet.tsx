@@ -51,6 +51,8 @@ type TaskSheetProps = {
   /** The open task's sub-tasks, in board order. */
   subtasks: Task[];
   agents: AgentOption[];
+  /** Whether agents can be newly assigned (Pro); existing assignments always show. */
+  canAssignAgents: boolean;
   agentRuns: AgentRun[];
   aiEnabled: boolean;
   onOpenTask: (task: Task) => void;
@@ -91,6 +93,7 @@ function TaskSheetBody({
   task,
   subtasks,
   agents,
+  canAssignAgents,
   agentRuns,
   aiEnabled,
   onOpenTask,
@@ -162,6 +165,12 @@ function TaskSheetBody({
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="none">Unassigned</SelectItem>
+                {/* Keeps a former or off-plan AI assignee visible in the trigger. */}
+                {assignedAgent === undefined && agentId && (
+                  <SelectItem value={assigneeId} disabled>
+                    AI teammate (removed)
+                  </SelectItem>
+                )}
                 {members.map((member) => (
                   <SelectItem key={member.id} value={member.id}>
                     <MemberAvatar member={member} className="size-5" />
@@ -169,7 +178,7 @@ function TaskSheetBody({
                   </SelectItem>
                 ))}
                 {agents.map((agent) => (
-                  <SelectItem key={agent.id} value={`agent:${agent.id}`}>
+                  <SelectItem key={agent.id} value={`agent:${agent.id}`} disabled={!canAssignAgents && agent.id !== agentId}>
                     <MemberAvatar member={{ name: agent.name, agent: true }} className="size-5" />
                     {agent.name} (AI)
                   </SelectItem>
@@ -371,7 +380,7 @@ function CommentsSection({
             const name =
               author.kind === "user"
                 ? memberName(author.userId)
-                : `${agents.find((a) => a.id === author.agentId)?.name ?? "AI teammate"} (AI)`;
+                : agentLabel(agents, author.agentId);
             const isAuthor = comment.author.kind === "user" && comment.author.userId === currentUserId;
             return (
               <li key={comment.id} className="rounded-md border p-3">
@@ -396,7 +405,8 @@ function CommentsSection({
                     </Button>
                   )}
                 </div>
-                <Markdown>{comment.body}</Markdown>
+                {/* AI output: no images (they would load on sight), links marked untrusted. */}
+                <Markdown untrusted={author.kind === "agent"}>{comment.body}</Markdown>
               </li>
             );
           })}
@@ -443,4 +453,9 @@ function DeleteTaskButton({ taskKey, onConfirm }: { taskKey: string; onConfirm: 
       </AlertDialogContent>
     </AlertDialog>
   );
+}
+
+function agentLabel(agents: AgentOption[], id: string) {
+  const agent = agents.find((a) => a.id === id);
+  return agent ? `${agent.name} (AI)` : "AI teammate (removed)";
 }

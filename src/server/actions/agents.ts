@@ -1,7 +1,7 @@
 "use server";
 
 import { refresh } from "next/cache";
-import { agentInputSchema } from "@/lib/domain";
+import { agentInputSchema, idSchema } from "@/lib/domain";
 import { formValues, type ActionResult, type FormState } from "@/lib/forms";
 import { assertAgentsAvailable, queueAgentRun } from "@/server/ai/agent/queue";
 import { requireTaskAccess, requireTeamMember } from "@/server/auth/guards";
@@ -36,7 +36,8 @@ export async function updateAgentAction(_prev: FormState, formData: FormData): P
   const parsed = agentInputSchema.safeParse(values);
   if (!parsed.success) return zodToFormState(parsed.error, values);
   const repos = getRepositories();
-  const agent = await repos.agents.get(values.agentId);
+  const id = idSchema.safeParse(values.agentId);
+  const agent = id.success ? await repos.agents.get(id.data) : null;
   if (!agent || agent.teamId !== team.id) return { formError: "This AI teammate no longer exists.", values };
   try {
     await repos.agents.update(agent.id, parsed.data);
@@ -51,7 +52,7 @@ export async function deleteAgentAction(teamSlug: string, agentId: string): Prom
   try {
     const { team } = await requireAgentManager(teamSlug);
     const repos = getRepositories();
-    const agent = await repos.agents.get(agentId);
+    const agent = await repos.agents.get(idSchema.parse(agentId));
     if (!agent || agent.teamId !== team.id) return { ok: false, error: "This AI teammate no longer exists." };
     await repos.agents.delete(agentId);
   } catch (error) {
@@ -64,7 +65,7 @@ export async function deleteAgentAction(teamSlug: string, agentId: string): Prom
 /** Runs the task's assigned AI teammate again (after a failure, or for a fresh take). */
 export async function retryAgentRunAction(taskId: string): Promise<ActionResult> {
   try {
-    const { user, team, membership, task } = await requireTaskAccess(taskId);
+    const { user, team, membership, task } = await requireTaskAccess(idSchema.parse(taskId));
     assertCan(membership.role, "task:update");
     if (task.assignee?.kind !== "agent") return { ok: false, error: "Assign an AI teammate first." };
     assertAgentsAvailable(team);

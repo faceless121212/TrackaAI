@@ -2,7 +2,7 @@
 
 import { Bot, RotateCcw } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useEffect, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { toast } from "sonner";
 import type { AgentOption } from "@/components/tasks/member-avatar";
 import { Badge } from "@/components/ui/badge";
@@ -18,6 +18,8 @@ const STATUS: Record<AgentRunStatus, string> = {
 };
 
 const POLL_MS = 3000;
+/** Runs older than this have timed out on the server (start_agent_run), so stop waiting. */
+const STALE_MS = 10 * 60_000;
 
 /** The task's AI teammate runs: live status while working, history, and Retry. */
 export function AgentRuns({
@@ -34,15 +36,21 @@ export function AgentRuns({
 }) {
   const router = useRouter();
   const [retrying, startRetry] = useTransition();
-  const active = runs.some(isActiveRun);
+  // Active and created in the last 10 minutes, so worth waiting for.
+  const [mountedAt] = useState(() => Date.now());
+  const waiting = runs.some((run) => isActiveRun(run) && mountedAt - new Date(run.createdAt).getTime() < STALE_MS);
 
   // Refresh while a run is in progress, so its comment and the move to review
   // show up without a reload.
   useEffect(() => {
-    if (!active) return;
+    if (!waiting) return;
     const timer = setInterval(() => router.refresh(), POLL_MS);
-    return () => clearInterval(timer);
-  }, [active, router]);
+    const stop = setTimeout(() => clearInterval(timer), STALE_MS);
+    return () => {
+      clearInterval(timer);
+      clearTimeout(stop);
+    };
+  }, [waiting, router]);
 
   if (!assignedAgent && runs.length === 0) return null;
   const agentName = (id: string) => agents.find((a) => a.id === id)?.name ?? "AI teammate";
@@ -54,7 +62,8 @@ export function AgentRuns({
           <Bot className="size-4" aria-hidden />
           AI teammate
         </h3>
-        {assignedAgent && !active && (
+        {/* A stale active run doesn't block: starting a new one times it out. */}
+        {assignedAgent && !waiting && (
           <Button
             variant="outline"
             size="sm"

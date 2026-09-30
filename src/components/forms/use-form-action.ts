@@ -9,11 +9,11 @@ import { initialFormState, type FormState } from "@/lib/forms";
  */
 export function useFormAction(
   action: (prev: FormState, formData: FormData) => Promise<FormState>,
-  onSuccess?: () => void,
+  onSuccess?: (state: FormState) => void,
 ) {
   return useActionState(async (prev: FormState, formData: FormData) => {
     const next = await action(prev, formData);
-    if (next.ok && onSuccess) startTransition(onSuccess);
+    if (next.ok && onSuccess) startTransition(() => onSuccess(next));
     return next;
   }, initialFormState);
 }

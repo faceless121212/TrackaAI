@@ -52,9 +52,10 @@ function CreateTaskForm({
   aiEnabled,
   onDone,
 }: Omit<CreateTaskDialogProps, "open" | "onOpenChange"> & { onDone: () => void }) {
-  const [state, action, pending] = useFormAction(createTaskAction, () => {
+  const [state, action, pending] = useFormAction(createTaskAction, (next) => {
     onDone();
     toast.success("Task created");
+    if (next.warning) toast.warning(next.warning);
   });
   const [title, setTitle] = useState(state.values?.title ?? "");
   const [description, setDescription] = useState(state.values?.description ?? "");

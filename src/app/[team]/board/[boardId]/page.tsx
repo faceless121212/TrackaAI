@@ -12,6 +12,9 @@ import { getRepositories } from "@/server/data";
 import { resolveDataBackend } from "@/server/data/backend";
 
 export const metadata: Metadata = { title: "Board" };
+// Server actions from this page may keep working after the response: an AI
+// teammate run (after()) needs up to about a minute.
+export const maxDuration = 120;
 
 export default async function BoardPage({ params, searchParams }: PageProps<"/[team]/board/[boardId]">) {
   const [{ team: teamSlug, boardId }, { task: taskKey }] = await Promise.all([params, searchParams]);
@@ -53,8 +56,8 @@ export default async function BoardPage({ params, searchParams }: PageProps<"/[t
       currentUserId={user.id}
       canManage={can(membership.role, "column:manage")}
       aiEnabled={aiAvailable()}
-      // AI teammates can be assigned on Pro (existing assignments still show otherwise).
-      agents={PLAN_CATALOG[team.plan].features.aiTeammate ? agents.map(({ id, name, specialty }) => ({ id, name, specialty })) : []}
+      agents={agents.map(({ id, name, specialty }) => ({ id, name, specialty }))}
+      canAssignAgents={PLAN_CATALOG[team.plan].features.aiTeammate}
       agentRuns={agentRuns}
       copilot={copilotAccess(team, membership.role)}
       canModerate={can(membership.role, "comment:moderate")}

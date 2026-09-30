@@ -192,8 +192,11 @@ function CreateTaskForm({
                       setLabelIds((ids) => (selected ? ids.filter((id) => id !== label.id) : [...ids, label.id]))
                     }
                     className={cn(
-                      "rounded-full transition-opacity focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
-                      !selected && "opacity-50 hover:opacity-80",
+                      // Selected chips are filled and brighter; fading unselected ones failed contrast.
+                      "rounded-full focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none [&>span]:transition-colors",
+                      selected
+                        ? "[&>span]:bg-accent [&>span]:border-foreground/40 [&>span]:text-foreground"
+                        : "[&>span]:hover:text-foreground",
                     )}
                   >
                     <LabelChip label={label} />

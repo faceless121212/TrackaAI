@@ -18,7 +18,7 @@ This file holds the detailed, task-level plan for the **current** milestone. Eac
 | M7 — AI I: task writer & breakdown | ✅ Done |
 | M8 — AI II: board copilot | ✅ Done |
 | M9 — AI III: AI teammate | ✅ Done |
-| M10 — Hardening & launch | 🚧 In progress (speed pass done) |
+| M10 — Hardening & launch | 🚧 In progress (speed pass; errors, a11y and rate limits done) |
 
 ---
 
@@ -15523,4 +15523,33 @@ Gotchas:
 - `getClaims()` verifies the token locally, so "sign out everywhere", a ban or a password reset only takes effect in the app when the access token expires (1 h by default). Team membership is still checked in the database on every request, so removing someone from a team is immediate. If sensitive actions need it later, call `getUser()` there or shorten the JWT expiry.
 - `loading.tsx` skeletons were tried and removed. With any of them present (even the board's), Next 16 sometimes dropped a server action's `refresh()` update to the shared layout, e.g. the sidebar kept the old team name after a rename, and three e2e tests failed consistently. Correct data matters more than a skeleton, and pages are now fast.
 
-Next in M10: error and empty states, an accessibility pass, rate limits, a background worker (service role) for AI teammate runs, and deploying to Vercel with production settings.
+# M10 — Hardening & launch — Part 2: errors, accessibility, rate limits
+
+Changes:
+- **Error pages:**
+  - `error.tsx` at the root and inside `[team]` (keeps the sidebar), with **Try again** (Next 16 `retry()`) and the error digest to match server logs.
+  - `global-error.tsx` has inline styles only, because it replaces the root layout.
+  - `not-found.tsx` at the root, and one inside `[team]` for a missing board, which keeps the sidebar.
+- **Empty states:**
+  - "My tasks" tells a team with no boards how to get one.
+  - A board with no columns says so, with the next step depending on the role.
+- **Accessibility:**
+  - `e2e/a11y.spec.ts` runs axe (WCAG 2.1 AA) over every public page, app page, dialog and panel, in both themes. Everything passes.
+  - Fixed along the way:
+    - Light-theme `--muted-foreground` and `--destructive` were a little under 4.5:1 on their tinted backgrounds.
+    - Unselected label toggles faded the text; the selected state is now a fill instead.
+    - Task cards were `role=button` wrappers around the card link, which is nested interactive and meant two tab stops per card.
+  - The card link is now the keyboard drag handle:
+    - Enter opens the task.
+    - Space picks it up, Left/Right move it between columns (`board-keyboard.ts`; dnd-kit's default never left the column) and Space drops it.
+    - Enter on a card used to do nothing.
+- **Rate limit:**
+  - `start_ai_run` refuses a user's 21st interactive AI run in a rolling minute, even on Pro (no monthly cap there), and the route answers 429 with `Retry-After`.
+  - AI teammate runs are exempt (they have their own caps).
+  - The limit is in the database with the reservation, so it holds across server instances. A per-user advisory lock (taken after the team row lock, always in that order) stops someone in several teams from slipping past it with parallel calls to different teams. Only AI spends money on the server's behalf; other writes are RLS-bound and cheap.
+
+Gotchas:
+- **`instanceof` across bundles:** the repositories are cached on `globalThis`, but a production build gives route handlers and pages separate copies of `errors.ts`. A `RateLimitError` thrown by repositories first built by a page failed `instanceof` in the AI route (500 instead of 429), and the same could hit `ConflictError`/`PlanLimitError`. The errors now carry their kinds under `Symbol.for(...)`, and `Symbol.hasInstance` checks that. Each class declares its own static `kind`, not its name, because bundlers mangle class names; a subclass without one matches nothing. `errors.test.ts` loads two copies of the module to cover it.
+- dnd-kit's keyboard sensor starts listening for arrow keys a tick after the pick-up, so the e2e test pauses briefly between keys.
+
+Next in M10: a background worker (service role) for AI teammate runs, and deploying to Vercel with production settings. Both need secrets or accounts only the owner can set up.

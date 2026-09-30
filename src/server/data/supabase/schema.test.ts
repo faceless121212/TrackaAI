@@ -1,7 +1,7 @@
 // @vitest-environment node
 import type { PGlite, Transaction } from "@electric-sql/pglite";
 import { beforeAll, describe, expect, it } from "vitest";
-import { PLAN_CATALOG, PLANS } from "@/lib/domain";
+import { AI_RATE_LIMIT, PLAN_CATALOG, PLANS } from "@/lib/domain";
 import { asUser, createTestDb, createUser } from "./pglite-harness";
 
 type Db = PGlite | Transaction;
@@ -679,6 +679,19 @@ describe("AI usage", () => {
     // Last month's runs don't count.
     await db.query("update ai_usage set created_at = now() - interval '40 days' where team_id = $1", [a.team]);
     await startRun(a.owner, a.team);
+  });
+
+  it("limits each user to AI_RATE_LIMIT interactive runs a minute, even on Pro", async () => {
+    const c = await makeTeam(db, "ai-gamma");
+    for (let i = 0; i < AI_RATE_LIMIT.runs; i++) await startRun(c.owner, c.team);
+    await expect(startRun(c.owner, c.team)).rejects.toThrow(/rate_limited/);
+    // AI teammate runs have their own caps and still go through.
+    await asUser(db, c.owner, (tx) => tx.query("select start_ai_run($1, 'agent', 'm')", [c.team]));
+    // Other people aren't slowed down by one busy user.
+    const d = await makeTeam(db, "ai-delta");
+    await startRun(d.owner, d.team);
+    await db.query("update ai_usage set created_at = now() - interval '61 seconds' where team_id = $1", [c.team]);
+    await startRun(c.owner, c.team);
   });
 
   it("records tokens once, for the caller's own run", async () => {

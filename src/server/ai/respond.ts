@@ -6,7 +6,7 @@ import type { AiFeature, Role, Team } from "@/lib/domain";
 import { settingsPath } from "@/lib/paths";
 import { can } from "@/server/auth/permissions";
 import { assertWithinPlan } from "@/server/billing/limits";
-import { PlanLimitError, getRepositories } from "@/server/data";
+import { PlanLimitError, RateLimitError, getRepositories } from "@/server/data";
 import { aiAvailable, generationModel } from "./model";
 import { finalUsage, streamStructured, type TokenUsage } from "./stream";
 
@@ -44,8 +44,9 @@ type RunOptions = { team: Pick<Team, "id" | "slug" | "plan">; userId: string; ro
 
 /**
  * Reserves one AI run (enforcing the plan's monthly limit atomically), or
- * returns the error response: 503 without a key, 402 at the limit (with the
- * upgrade link for the owner; everyone else is told to ask them).
+ * returns the error response: 503 without a key, 429 when the user is over the
+ * per-minute burst limit, 402 at the monthly limit (with the upgrade link for
+ * the owner; everyone else is told to ask them).
  */
 export async function reserveRun(options: RunOptions): Promise<{ id: string } | Response> {
   if (!aiAvailable()) return aiError("AI isn't set up on this server yet.", 503);
@@ -60,6 +61,11 @@ export async function reserveRun(options: RunOptions): Promise<{ id: string } | 
     });
     return { id };
   } catch (error) {
+    if (error instanceof RateLimitError) {
+      const response = aiError(error.message, 429);
+      response.headers.set("Retry-After", String(error.retryAfter));
+      return response;
+    }
     if (!(error instanceof PlanLimitError)) throw error;
     return can(options.role, "billing:manage")
       ? aiError(error.message, 402, settingsPath(options.team.slug, "billing"))

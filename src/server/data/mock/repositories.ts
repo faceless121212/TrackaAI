@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { generateNKeysBetween } from "fractional-indexing";
 import {
+  AI_RATE_LIMIT,
   canAdd,
   monthStart,
   DEFAULT_COLUMNS,
@@ -18,7 +19,15 @@ import {
   isActiveRun,
   type AgentRun,
 } from "@/lib/domain";
-import { AGENT_BUSY, AGENT_DAILY_LIMIT, AGENT_NOT_ASSIGNED, ConflictError, NotFoundError, PlanLimitError } from "../errors";
+import {
+  AGENT_BUSY,
+  AGENT_DAILY_LIMIT,
+  AGENT_NOT_ASSIGNED,
+  ConflictError,
+  NotFoundError,
+  PlanLimitError,
+  RateLimitError,
+} from "../errors";
 import type { Repositories } from "../types";
 import type { MockDb } from "./db";
 import { hashPassword, verifyPassword } from "./password";
@@ -506,6 +515,13 @@ export function createMockRepositories(store: MockStore, session: SessionStore =
       startRun: (input) =>
         store.write((db) => {
           const team = find(db.teams, (t) => t.id === input.teamId, "Team", input.teamId);
+          if (input.feature !== "agent") {
+            const windowStart = new Date(Date.now() - AI_RATE_LIMIT.windowSeconds * 1000).toISOString();
+            const recent = db.aiUsage.filter(
+              (u) => u.userId === input.userId && u.feature !== "agent" && u.createdAt > windowStart,
+            ).length;
+            if (recent >= AI_RATE_LIMIT.runs) throw new RateLimitError(AI_RATE_LIMIT.windowSeconds);
+          }
           const since = monthStart().toISOString();
           const used = db.aiUsage.filter((u) => u.teamId === team.id && u.createdAt >= since).length;
           if (!canAdd(team.plan, "aiRuns", used)) throw new PlanLimitError(team.plan, "aiRuns");

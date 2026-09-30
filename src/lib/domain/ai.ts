@@ -7,6 +7,12 @@ import { PRIORITIES, idSchema, type Label } from "./schemas";
 export const AI_FEATURES = ["task_writer", "breakdown", "copilot", "agent"] as const;
 export type AiFeature = (typeof AI_FEATURES)[number];
 
+/**
+ * Per-user burst limit on interactive AI runs (AI teammate runs are exempt).
+ * Enforced by start_ai_run and the mock; keep the migration in step.
+ */
+export const AI_RATE_LIMIT = { runs: 20, windowSeconds: 60 } as const;
+
 export const taskDraftSchema = z.object({
   title: z.string().describe("A short, specific task title in the imperative, at most 80 characters."),
   description: z

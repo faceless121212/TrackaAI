@@ -62,7 +62,9 @@ export async function reserveRun(options: RunOptions): Promise<{ id: string } | 
     return { id };
   } catch (error) {
     if (error instanceof RateLimitError) {
-      return Response.json({ error: error.message }, { status: 429, headers: { "Retry-After": String(error.retryAfter) } });
+      const response = aiError(error.message, 429);
+      response.headers.set("Retry-After", String(error.retryAfter));
+      return response;
     }
     if (!(error instanceof PlanLimitError)) throw error;
     return can(options.role, "billing:manage")

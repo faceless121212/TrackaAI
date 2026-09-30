@@ -2,7 +2,7 @@ import "server-only";
 import { anthropic } from "@ai-sdk/anthropic";
 import type { LanguageModel } from "ai";
 import { mockCopilotModel } from "./copilot/mock-copilot-model";
-import { jsonStreamModel } from "./mock-model";
+import { jsonStreamModel, textModel } from "./mock-model";
 
 /** Cheap generation (task writer, breakdown). */
 export const GENERATION_MODEL = "claude-haiku-4-5";
@@ -26,5 +26,16 @@ export function generationModel(mockOutput: () => unknown): { model: LanguageMod
 
 export function copilotModel(): { model: LanguageModel; modelId: string } {
   if (aiMocked()) return { model: mockCopilotModel(), modelId: "mock" };
+  return { model: anthropic(COPILOT_MODEL), modelId: COPILOT_MODEL };
+}
+
+/** AI teammates write longer deliverables. */
+export function agentModel(): { model: LanguageModel; modelId: string } {
+  if (aiMocked()) {
+    return {
+      model: textModel("**Summary:** a first pass from the mock AI teammate.\n\n## Plan\n- Step one\n- Step two"),
+      modelId: "mock",
+    };
+  }
   return { model: anthropic(COPILOT_MODEL), modelId: COPILOT_MODEL };
 }

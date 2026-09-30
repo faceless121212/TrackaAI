@@ -21,3 +21,15 @@ export function formValues<K extends string>(formData: FormData, keys: readonly 
     string
   >;
 }
+
+/** Assignee pickers use "none", "<userId>" or "agent:<agentId>" as option values. */
+export function parseAssigneeValue(value: string | undefined) {
+  if (!value || value === "none") return null;
+  if (value.startsWith("agent:")) return { kind: "agent" as const, agentId: value.slice("agent:".length) };
+  return { kind: "user" as const, userId: value };
+}
+
+export function assigneeValue(assignee: { kind: "user"; userId: string } | { kind: "agent"; agentId: string } | null) {
+  if (!assignee) return "none";
+  return assignee.kind === "agent" ? `agent:${assignee.agentId}` : assignee.userId;
+}

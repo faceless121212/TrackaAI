@@ -21,6 +21,7 @@ describe("can", () => {
     "member:invite",
     "team:update",
     "label:manage",
+    "agent:manage",
   ] as const)("limits %s to owners and admins", (action) => {
     expect(can("owner", action)).toBe(true);
     expect(can("admin", action)).toBe(true);

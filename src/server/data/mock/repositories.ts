@@ -514,7 +514,7 @@ export function createMockRepositories(store: MockStore, session: SessionStore =
       listForTeam: (teamId) =>
         store.read((db) => db.agents.filter((a) => a.teamId === teamId).sort((a, b) => a.name.localeCompare(b.name))),
       get: (id) => store.read((db) => db.agents.find((a) => a.id === id) ?? null),
-      create: (teamId, { name, specialty, createdBy: _createdBy }) =>
+      create: (teamId, { name, specialty }) =>
         store.write((db) => {
           assertUniqueAgentName(db, teamId, name);
           const agent = { id: newId(), teamId, name, specialty, createdAt: now() };

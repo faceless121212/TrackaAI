@@ -18,7 +18,7 @@ This file holds the detailed, task-level plan for the **current** milestone. Eac
 | M7 — AI I: task writer & breakdown | ✅ Done |
 | M8 — AI II: board copilot | ✅ Done |
 | M9 — AI III: AI teammate | ✅ Done |
-| M10 — Hardening & launch | 🚧 In progress (speed pass; errors, a11y and rate limits done) |
+| M10 — Hardening & launch | 🚧 In progress (speed, errors, a11y, rate limits, worker token done; deploy left) |
 
 ---
 
@@ -15552,4 +15552,19 @@ Gotchas:
 - **`instanceof` across bundles:** the repositories are cached on `globalThis`, but a production build gives route handlers and pages separate copies of `errors.ts`. A `RateLimitError` thrown by repositories first built by a page failed `instanceof` in the AI route (500 instead of 429), and the same could hit `ConflictError`/`PlanLimitError`. The errors now carry their kinds under `Symbol.for(...)`, and `Symbol.hasInstance` checks that. Each class declares its own static `kind`, not its name, because bundlers mangle class names; a subclass without one matches nothing. `errors.test.ts` loads two copies of the module to cover it.
 - dnd-kit's keyboard sensor starts listening for arrow keys a tick after the pick-up, so the e2e test pauses briefly between keys.
 
-Next in M10: a background worker (service role) for AI teammate runs, and deploying to Vercel with production settings. Both need secrets or accounts only the owner can set up.
+Next in M10: closing the AI teammate impersonation gap, and deploying to Vercel with production settings.
+
+# M10 — Part 3: only the server can post as an AI teammate
+
+The M9 limitation: the requester's own session could call `finish_agent_run` with its own text and have it posted as the teammate. The plan was a service-role worker, but that needs the Supabase secret key, which stays with the owner. A server-held worker token does the same job without it:
+
+- `claim_agent_run`, `finish_agent_run` and `fail_agent_run` now take `p_worker_token`. `private.assert_worker` compares its SHA-256 with `private.worker_secrets`, a table no API role can read; the check function isn't callable by them either. The `requested_by = auth.uid()` checks stay.
+- The server reads the token from `AGENT_WORKER_SECRET` (`src/server/data/supabase/worker-token.ts`) and sends it only on those calls, over TLS to Supabase, so it never reaches a browser.
+- Without the token configured (in the app or the database), assigning to a teammate warns "AI teammates aren't set up on this server yet" instead of queuing runs that can't finish.
+- The token was generated into `.env.local` and only its hash was stored live. To rotate: put a new value in the env and upsert its SHA-256 (SQL in the migration header).
+
+Tests: PGlite (wrong, empty, missing and unconfigured tokens refused; the table and check unreadable), and live (the requester's own client is refused).
+
+Gotcha: this changes the RPC signatures, so a server still running older code can't finish teammate runs until it's rebuilt.
+
+Next in M10: deploying to Vercel with production settings (needs the owner's Vercel account).

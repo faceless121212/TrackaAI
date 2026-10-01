@@ -19,7 +19,7 @@ Set `ANTHROPIC_API_KEY` in `.env.local` to enable the AI task writer (**Write wi
 
 On Pro, the board's **Copilot** panel (`claude-sonnet-5`) answers questions about the board and proposes changes (create, update, move, assign); each change is a card you approve or deny, and it runs with your permissions. Set `TOOL_APPROVAL_SECRET` in production so approvals are signed with a shared key.
 
-Also on Pro, managers add **AI teammates** in **Settings → AI teammates** (a name and a specialty). Assign a task to one and it writes a first result (a spec, plan or draft) as a comment, then moves the task to **In Review**; the task sheet shows its runs and a **Run again** button. Runs happen in the background after the request (`after()`); a job queue can take over later.
+Also on Pro, managers add **AI teammates** in **Settings → AI teammates** (a name and a specialty). Assign a task to one and it writes a first result (a spec, plan or draft) as a comment, then moves the task to **In Review**; the task sheet shows its runs and a **Run again** button. Runs happen in the background after the request (`after()`); a job queue can take over later. On the Supabase backend, set `AGENT_WORKER_SECRET` and store its SHA-256 in `private.worker_secrets` (see `.env.example`): only the server can then post as a teammate.
 
 ### Checking a live setup
 

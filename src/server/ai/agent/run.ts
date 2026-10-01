@@ -47,7 +47,15 @@ export async function runAgentTask(options: {
   modelId: string;
 }): Promise<void> {
   const { repos, runId, userId } = options;
-  if (!(await repos.agentRuns.claim(runId, userId))) return;
+  try {
+    if (!(await repos.agentRuns.claim(runId, userId))) return;
+  } catch (error) {
+    // Usually the database rejecting the worker token (missing, or rotated in
+    // only one place). fail() needs the same token, so the run can only time
+    // out; say why in the logs instead of crashing the after() callback.
+    console.error("[ai] couldn't claim an AI teammate run (check AGENT_WORKER_SECRET and private.worker_secrets)", error);
+    return;
+  }
   try {
     const run = await repos.agentRuns.get(runId);
     const task = run && (await repos.tasks.get(run.taskId));

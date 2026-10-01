@@ -18,7 +18,7 @@ async function signedIn(email: string) {
   const repos = createSupabaseRepositories(async () => client);
   const user = await repos.auth.signIn({ email, password: PASSWORD });
   if (!user) throw new Error(`Seeded account ${email} can't sign in — run supabase/seed.sql`);
-  return { repos, user };
+  return { repos, user, client };
 }
 
 describe.skipIf(!url || !key)("Supabase repositories (live project)", () => {
@@ -147,6 +147,15 @@ describe.skipIf(!url || !key)("Supabase repositories (live project)", () => {
 
     const run = await r.agentRuns.start(task.id, agent.id, demo.user.id);
     await expect(r.agentRuns.start(task.id, agent.id, demo.user.id)).rejects.toBeInstanceOf(ConflictError);
+    // The requester's own browser session can't drive the run: no worker token.
+    for (const token of ["", "guessed-token"]) {
+      const claim = await demo.client.rpc("claim_agent_run", { p_run: run.id, p_worker_token: token });
+      expect(claim.error?.message).toBe("forbidden");
+    }
+    // Unreachable from a browser (here `private` isn't even an exposed API
+    // schema; the grants themselves are tested in schema.test.ts).
+    const { error: secretsError } = await demo.client.schema("private" as "public").from("worker_secrets" as never).select("*");
+    expect(secretsError).not.toBeNull();
     expect(await r.agentRuns.claim(run.id, demo.user.id)).toBe(true);
     const commentId = await r.agentRuns.finish(run.id, demo.user.id, "Here is the spec.");
     expect(await r.comments.get(commentId)).toMatchObject({ author: { kind: "agent", agentId: agent.id } });

@@ -1,7 +1,13 @@
 import "server-only";
 import { after } from "next/server";
 import { PLAN_CATALOG, type AgentRun, type Team } from "@/lib/domain";
-import { ConflictError, getBackgroundRepositories, getRepositories } from "@/server/data";
+import {
+  AGENT_WORKER_MISSING,
+  ConflictError,
+  agentWorkerConfigured,
+  getBackgroundRepositories,
+  getRepositories,
+} from "@/server/data";
 import { agentModel, aiAvailable } from "../model";
 import { runAgentTask } from "./run";
 
@@ -11,6 +17,7 @@ export const AGENTS_NEED_PRO = "AI teammates are part of the Pro plan.";
 export function assertAgentsAvailable(team: Pick<Team, "plan">) {
   if (!PLAN_CATALOG[team.plan].features.aiTeammate) throw new ConflictError("plan", AGENTS_NEED_PRO);
   if (!aiAvailable()) throw new ConflictError("agent", "AI isn't set up on this server yet.");
+  if (!agentWorkerConfigured()) throw new ConflictError("agent", AGENT_WORKER_MISSING);
 }
 
 /**

@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTaskInputSchema, type Agent, type Task, type User } from "@/lib/domain";
 import { emptyDb } from "@/server/data/mock/db";
 import { createMockRepositories } from "@/server/data/mock/repositories";
@@ -53,6 +53,22 @@ describe("runAgentTask", () => {
     expect((await repos.tasks.get(task.id))?.columnId).toBe(columns.find((c) => c.name === "In Review")!.id);
     const usage = await store.read((db) => db.aiUsage);
     expect(usage).toEqual([expect.objectContaining({ feature: "agent", inputTokens: 300, outputTokens: 120 })]);
+  });
+
+  it("logs and stops when the run can't be claimed (e.g. the worker token is rejected)", async () => {
+    const run = await repos.agentRuns.start(task.id, agent.id, owner.id);
+    const rejecting: Repositories = {
+      ...repos,
+      agentRuns: { ...repos.agentRuns, claim: () => Promise.reject(new Error("Supabase error 42501: forbidden")) },
+    };
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    await expect(
+      runAgentTask({ repos: rejecting, runId: run.id, userId: owner.id, model: textModel("unused"), modelId: "mock" }),
+    ).resolves.toBeUndefined();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("AGENT_WORKER_SECRET"), expect.any(Error));
+    log.mockRestore();
+    expect(await repos.agentRuns.get(run.id)).toMatchObject({ status: "queued" }); // times out later
+    expect(await store.read((db) => db.aiUsage)).toEqual([]); // the model was never called
   });
 
   it("records a failure with a readable reason and leaves the task where it was", async () => {

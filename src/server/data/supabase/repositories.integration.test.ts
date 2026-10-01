@@ -152,6 +152,8 @@ describe.skipIf(!url || !key)("Supabase repositories (live project)", () => {
       const claim = await demo.client.rpc("claim_agent_run", { p_run: run.id, p_worker_token: token });
       expect(claim.error?.message).toBe("forbidden");
     }
+    // Unreachable from a browser (here `private` isn't even an exposed API
+    // schema; the grants themselves are tested in schema.test.ts).
     const { error: secretsError } = await demo.client.schema("private" as "public").from("worker_secrets" as never).select("*");
     expect(secretsError).not.toBeNull();
     expect(await r.agentRuns.claim(run.id, demo.user.id)).toBe(true);

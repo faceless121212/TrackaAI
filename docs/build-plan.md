@@ -15560,7 +15560,7 @@ The M9 limitation: the requester's own session could call `finish_agent_run` wit
 
 - `claim_agent_run`, `finish_agent_run` and `fail_agent_run` now take `p_worker_token`. `private.assert_worker` compares its SHA-256 with `private.worker_secrets`, a table no API role can read; the check function isn't callable by them either. The `requested_by = auth.uid()` checks stay.
 - The server reads the token from `AGENT_WORKER_SECRET` (`src/server/data/supabase/worker-token.ts`) and sends it only on those calls, over TLS to Supabase, so it never reaches a browser.
-- Without the token configured (in the app or the database), assigning to a teammate warns "AI teammates aren't set up on this server yet" instead of queuing runs that can't finish.
+- Without `AGENT_WORKER_SECRET`, assigning a task to a teammate or running one is refused with "AI teammates aren't set up on this server yet" (like a missing AI key), instead of queuing runs that can't finish. If the database rejects the token (no hash stored, or rotated in only one place), the run can't be claimed: the server logs why and the run times out after 10 minutes.
 - The token was generated into `.env.local` and only its hash was stored live. To rotate: put a new value in the env and upsert its SHA-256 (SQL in the migration header).
 
 Tests: PGlite (wrong, empty, missing and unconfigured tokens refused; the table and check unreadable), and live (the requester's own client is refused).

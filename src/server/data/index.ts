@@ -8,6 +8,7 @@ import { createFileStore } from "./mock/store";
 import { createSupabaseRepositories } from "./supabase/repositories";
 import { createSupabaseServerClient } from "./supabase/server-client";
 import { createAccessTokenClient } from "./supabase/token-client";
+import { agentWorkerToken } from "./supabase/worker-token";
 import type { Repositories } from "./types";
 
 // One instance per server process (survives dev hot reloads). The mock needs
@@ -42,5 +43,10 @@ export async function getBackgroundRepositories(): Promise<Repositories> {
   return createSupabaseRepositories(async () => client);
 }
 
+/** Whether AI teammate runs can complete on this server (the Supabase backend needs a worker token). */
+export function agentWorkerConfigured(): boolean {
+  return resolveDataBackend(process.env.DATA_BACKEND) !== "supabase" || agentWorkerToken() !== null;
+}
+
 export type * from "./types";
-export { ConflictError, NotFoundError, PlanLimitError, RateLimitError } from "./errors";
+export { AGENT_WORKER_MISSING, ConflictError, NotFoundError, PlanLimitError, RateLimitError } from "./errors";

@@ -28,6 +28,7 @@ import {
   AGENT_BUSY,
   AGENT_DAILY_LIMIT,
   AGENT_NOT_ASSIGNED,
+  AGENT_WORKER_MISSING,
   ConflictError,
   NotFoundError,
   PlanLimitError,
@@ -35,6 +36,7 @@ import {
 } from "../errors";
 import type { Repositories } from "../types";
 import type { Database } from "./database.types";
+import { agentWorkerToken } from "./worker-token";
 
 type Client = SupabaseClient<Database>;
 type Row<T extends keyof Database["public"]["Tables"]> = Database["public"]["Tables"][T]["Row"];
@@ -222,6 +224,7 @@ const RAISED: Record<string, () => Error> = {
   agent_not_assigned: () => new ConflictError("agent", AGENT_NOT_ASSIGNED),
   agent_busy: () => new ConflictError("agent", AGENT_BUSY),
   agent_daily_limit: () => new ConflictError("agent", AGENT_DAILY_LIMIT),
+  worker_not_configured: () => new ConflictError("agent", AGENT_WORKER_MISSING),
   run_not_running: () => new NotFoundError("Run", "id"),
   not_owner: () => new ConflictError("owner", "Only the owner can transfer ownership"),
 };
@@ -245,6 +248,12 @@ function toError(error: PostgrestError): Error {
   // PGRST116: .single() found no row — RLS hid it or it doesn't exist.
   if (error.code === "PGRST116") return new NotFoundError("Row", "id");
   return new Error(`Supabase error ${error.code}: ${error.message}`);
+}
+
+function workerToken(): string {
+  const token = agentWorkerToken();
+  if (!token) throw new ConflictError("agent", AGENT_WORKER_MISSING);
+  return token;
 }
 
 type Result<T> = { data: T; error: PostgrestError | null };
@@ -951,17 +960,21 @@ export function createSupabaseRepositories(client: () => Promise<Client>): Repos
         const id = data(await db.rpc("start_agent_run", { p_task: taskId, p_agent: agentId }));
         return toAgentRun(data(await db.from("agent_runs").select("*").eq("id", id).single()));
       },
+      // Each step after start carries the server's worker token, so only the
+      // app server (not the requester's browser) can post as the teammate.
       async claim(runId) {
         const db = await client();
-        return data(await db.rpc("claim_agent_run", { p_run: runId }));
+        return data(await db.rpc("claim_agent_run", { p_run: runId, p_worker_token: workerToken() }));
       },
       async finish(runId, _userId, body) {
         const db = await client();
-        return data(await db.rpc("finish_agent_run", { p_run: runId, p_body: body }));
+        return data(
+          await db.rpc("finish_agent_run", { p_run: runId, p_body: body, p_worker_token: workerToken() }),
+        );
       },
       async fail(runId, _userId, error) {
         const db = await client();
-        check(await db.rpc("fail_agent_run", { p_run: runId, p_error: error }));
+        check(await db.rpc("fail_agent_run", { p_run: runId, p_error: error, p_worker_token: workerToken() }));
       },
       async get(id) {
         const db = await client();

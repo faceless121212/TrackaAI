@@ -102,15 +102,15 @@ export type Database = {
         Returns: string;
       };
       claim_agent_run: {
-        Args: { p_run: string; p_actor?: string };
+        Args: { p_run: string; p_worker_token: string; p_actor?: string };
         Returns: boolean;
       };
       finish_agent_run: {
-        Args: { p_run: string; p_body: string; p_actor?: string };
+        Args: { p_run: string; p_body: string; p_worker_token: string; p_actor?: string };
         Returns: string;
       };
       fail_agent_run: {
-        Args: { p_run: string; p_error: string; p_actor?: string };
+        Args: { p_run: string; p_error: string; p_worker_token: string; p_actor?: string };
         Returns: undefined;
       };
       start_ai_run: {

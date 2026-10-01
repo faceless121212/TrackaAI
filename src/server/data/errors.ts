@@ -84,3 +84,4 @@ export class RateLimitError extends TaggedError {
 export const AGENT_NOT_ASSIGNED = "Assign the task to this AI teammate first.";
 export const AGENT_BUSY = "Your AI teammates are already working on 3 tasks. Try again when one finishes.";
 export const AGENT_DAILY_LIMIT = "Your team has used today's 50 AI teammate runs. Try again tomorrow.";
+export const AGENT_WORKER_MISSING = "AI teammates aren't set up on this server yet.";

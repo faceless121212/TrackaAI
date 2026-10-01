@@ -741,9 +741,14 @@ describe("AI teammates", () => {
   let member: string;
   let agent: string;
   let otherAgent: string;
+  const WORKER = "worker-token-for-tests-0123456789abcdef";
 
   beforeAll(async () => {
     db = await createTestDb();
+    await db.query(
+      "insert into private.worker_secrets (name, token_sha256) values ('agent_worker', sha256(convert_to($1, 'UTF8')))",
+      [WORKER],
+    );
     t = await makeTeam(db, "bots");
     other = await makeTeam(db, "rivals");
     member = await createUser(db, "bots-member@example.test");
@@ -791,9 +796,9 @@ describe("AI teammates", () => {
       asUser(db, member, (tx) => tx.query("select start_agent_run($1, $2)", [t.task.id, agent])),
     ).rejects.toThrow(/agent_runs_one_active/);
     // Only the requester moves the run along.
-    expect(await asUser(db, t.owner, (tx) => one(tx, "select claim_agent_run($1) as ok", [run.id]))).toEqual({ ok: false });
-    expect(await asUser(db, member, (tx) => one(tx, "select claim_agent_run($1) as ok", [run.id]))).toEqual({ ok: true });
-    await asUser(db, member, (tx) => tx.query("select finish_agent_run($1, 'Here is the spec.')", [run.id]));
+    expect(await asUser(db, t.owner, (tx) => one(tx, "select claim_agent_run($1, $2) as ok", [run.id, WORKER]))).toEqual({ ok: false });
+    expect(await asUser(db, member, (tx) => one(tx, "select claim_agent_run($1, $2) as ok", [run.id, WORKER]))).toEqual({ ok: true });
+    await asUser(db, member, (tx) => tx.query("select finish_agent_run($1, 'Here is the spec.', $2)", [run.id, WORKER]));
 
     expect(await one(db, "select status, comment_id is not null as commented from agent_runs where id = $1", [run.id])).toEqual({
       status: "succeeded",
@@ -806,10 +811,34 @@ describe("AI teammates", () => {
     expect(await asUser(db, other.owner, (tx) => count(tx, `agent_runs where task_id = '${t.task.id}'`))).toBe(0);
   });
 
+  it("only lets the app server's worker claim, finish or fail a run, never the requester's own client", async () => {
+    const run = await asUser(db, member, (tx) => one<{ id: string }>(tx, "select start_agent_run($1, $2) as id", [t.task.id, agent]));
+    for (const token of [null, "", "guessed-token", WORKER.toUpperCase()]) {
+      await expect(asUser(db, member, (tx) => tx.query("select claim_agent_run($1, $2)", [run.id, token]))).rejects.toThrow(/forbidden/);
+      await expect(
+        asUser(db, member, (tx) => tx.query("select finish_agent_run($1, 'Posing as the teammate', $2)", [run.id, token])),
+      ).rejects.toThrow(/forbidden/);
+      await expect(asUser(db, member, (tx) => tx.query("select fail_agent_run($1, 'x', $2)", [run.id, token]))).rejects.toThrow(/forbidden/);
+    }
+    // The token's hash and the check itself are out of reach of API roles.
+    await expect(asUser(db, member, (tx) => tx.query("select * from private.worker_secrets"))).rejects.toThrow(/permission denied/);
+    await expect(asUser(db, member, (tx) => tx.query("select private.assert_worker($1)", [WORKER]))).rejects.toThrow(/permission denied/);
+    expect(await one(db, "select status from agent_runs where id = $1", [run.id])).toEqual({ status: "queued" });
+
+    // Without a configured token, nothing passes.
+    await db.query("delete from private.worker_secrets");
+    await expect(asUser(db, member, (tx) => tx.query("select claim_agent_run($1, $2)", [run.id, WORKER]))).rejects.toThrow(/worker_not_configured/);
+    await db.query(
+      "insert into private.worker_secrets (name, token_sha256) values ('agent_worker', sha256(convert_to($1, 'UTF8')))",
+      [WORKER],
+    );
+    await asUser(db, member, (tx) => tx.query("select fail_agent_run($1, 'cleanup', $2)", [run.id, WORKER]));
+  });
+
   it("records failures and allows a retry", async () => {
     const run = await asUser(db, member, (tx) => one<{ id: string }>(tx, "select start_agent_run($1, $2) as id", [t.task.id, agent]));
-    await asUser(db, member, (tx) => tx.query("select claim_agent_run($1)", [run.id]));
-    await asUser(db, member, (tx) => tx.query("select fail_agent_run($1, 'model overloaded')", [run.id]));
+    await asUser(db, member, (tx) => tx.query("select claim_agent_run($1, $2)", [run.id, WORKER]));
+    await asUser(db, member, (tx) => tx.query("select fail_agent_run($1, 'model overloaded', $2)", [run.id, WORKER]));
     expect(await one(db, "select status, error from agent_runs where id = $1", [run.id])).toEqual({ status: "failed", error: "model overloaded" });
     await asUser(db, member, (tx) => tx.query("select start_agent_run($1, $2)", [t.task.id, agent]));
   });

@@ -28,14 +28,14 @@ const teammateVisual = (
       <span className="text-muted-foreground">AI teammate · working on ENG-6</span>
     </div>
     <div className="bg-foreground/10 h-1.5 overflow-hidden rounded-full">
-      <div className="mkt-fill from-mkt-accent/60 to-mkt-accent h-full w-3/4 rounded-full bg-gradient-to-r" />
+      <div className="mkt-fill from-mkt-accent/60 to-mkt-accent h-full w-full rounded-full bg-gradient-to-r" />
     </div>
     <div className="mkt-rise space-y-1.5 text-sm" style={delay(0.8)}>
       <p className="font-medium">Q4 roadmap: goal and acceptance criteria</p>
       <div className="bg-foreground/10 h-2 w-11/12 rounded-full" />
       <div className="bg-foreground/10 h-2 w-4/5 rounded-full" />
     </div>
-    <Chip className="mkt-rise" >
+    <Chip className="mkt-rise">
       <span className="size-1.5 rounded-full bg-[var(--label-green)]" /> Moved to In Review
     </Chip>
   </div>
@@ -66,9 +66,7 @@ const askVisual = (
 const writerVisual = (
   <div className="space-y-2 text-left text-sm">
     <div className={cn(panel, "text-muted-foreground px-3 py-2")}>
-      <span className="mkt-typing inline-block align-bottom" style={{ width: "23ch" }}>
-        export the board as CSV
-      </span>
+      <span className="mkt-typing inline-block align-bottom font-mono text-xs">export the board as CSV</span>
     </div>
     <div className={cn(panel, "mkt-rise space-y-2 p-3")} style={delay(2.8)}>
       <p className="font-medium">Export a board to CSV</p>

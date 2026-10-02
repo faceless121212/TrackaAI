@@ -28,7 +28,7 @@ const METEORS: { left: string; top: string; delay: string; duration: string }[] 
 /** Thin streaks of light gliding diagonally across the hero (hidden under reduced motion). */
 export function Meteors() {
   return (
-    <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
+    <div aria-hidden className="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
       {METEORS.map((m) => (
         <span
           key={m.left}

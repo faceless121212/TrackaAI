@@ -8,10 +8,19 @@ import { SiteHeader } from "./site-header";
  * Frame for the marketing pages. Always dark (Linear-style), whatever the
  * visitor's app theme: `dark` switches every token, `marketing` tints them.
  */
-export function MarketingShell({ children, signedIn }: { children: ReactNode; signedIn?: boolean }) {
+export function MarketingShell({
+  children,
+  signedIn,
+  animated,
+}: {
+  children: ReactNode;
+  signedIn?: boolean;
+  /** The page has looping animations: show the "Pause animations" control. */
+  animated?: boolean;
+}) {
   return (
     <div className="dark marketing bg-background text-foreground flex min-h-svh flex-col [color-scheme:dark]">
-      <SiteHeader signedIn={signedIn} />
+      <SiteHeader signedIn={signedIn} motionToggle={animated} />
       <main className="flex-1">{children}</main>
       <SiteFooter />
     </div>

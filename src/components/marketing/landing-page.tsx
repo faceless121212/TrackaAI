@@ -9,7 +9,7 @@ import { Workflows } from "./workflows";
 
 export function LandingPage() {
   return (
-    <MarketingShell>
+    <MarketingShell animated>
       <Hero />
       <Features />
       <Workflows />

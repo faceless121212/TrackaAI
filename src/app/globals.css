@@ -194,29 +194,63 @@
   }
 }
 
-@keyframes mkt-type { from { width: 0; } }
-@keyframes mkt-caret { 50% { border-color: transparent; } }
+/* Feature-card vignettes. Compositor-friendly where they loop (transform and
+   opacity only); they play when scrolled into view where scroll timelines
+   exist, and on load elsewhere. */
+@keyframes mkt-type { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+@keyframes mkt-blink { 50% { opacity: 0; } }
 @keyframes mkt-rise { from { opacity: 0; transform: translateY(6px); } }
-@keyframes mkt-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 var(--mkt-glow); }
-  50% { box-shadow: 0 0 0 6px transparent; }
-}
-@keyframes mkt-fill { from { width: 8%; } to { width: 92%; } }
+@keyframes mkt-ring { 0% { opacity: 0.9; transform: scale(1); } 100% { opacity: 0; transform: scale(1.35); } }
+@keyframes mkt-fill { from { transform: scaleX(0.08); } to { transform: scaleX(0.92); } }
 
 .mkt-typing {
-  overflow: hidden;
+  position: relative;
   white-space: nowrap;
-  border-right: 2px solid var(--mkt-accent);
-  animation: mkt-type 2.4s steps(26) 0.4s both, mkt-caret 0.9s step-end infinite;
+  animation: mkt-type 2.3s steps(23) 0.3s both;
+}
+.mkt-typing::after {
+  content: "";
+  position: absolute;
+  top: 0.1em;
+  right: -3px;
+  bottom: 0.1em;
+  width: 2px;
+  background: var(--mkt-accent);
+  animation: mkt-blink 0.9s step-end infinite;
 }
 .mkt-rise { animation: mkt-rise 0.6s ease-out both; animation-delay: var(--mkt-delay, 0s); }
-.mkt-pulse { animation: mkt-pulse 2.4s ease-in-out infinite; }
-.mkt-fill { animation: mkt-fill 3.2s ease-in-out infinite alternate; }
+.mkt-pulse { position: relative; }
+.mkt-pulse::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: 0 0 0 2px var(--mkt-accent);
+  animation: mkt-ring 2.4s ease-out infinite;
+}
+.mkt-fill { transform-origin: left center; animation: mkt-fill 3.2s ease-in-out infinite alternate; }
+
+@supports (animation-timeline: view()) {
+  .mkt-typing, .mkt-rise {
+    animation-timeline: view();
+    animation-range: entry 60% cover 40%;
+    animation-delay: 0s;
+  }
+}
+
+/* WCAG 2.2.2: the landing page's "Pause animations" button sets this. */
+.marketing[data-motion="paused"] .mkt-meteor { display: none; }
+.marketing[data-motion="paused"] [class*="mkt-"],
+.marketing[data-motion="paused"] [class*="mkt-"]::after {
+  animation-play-state: paused !important;
+}
 
 @media (prefers-reduced-motion: reduce) {
-  .mkt-meteor, .mkt-tilt, .mkt-lid, .mkt-typing, .mkt-rise, .mkt-pulse, .mkt-fill {
+  .mkt-meteor, .mkt-tilt, .mkt-lid, .mkt-typing, .mkt-rise, .mkt-pulse, .mkt-fill,
+  .mkt-typing::after, .mkt-pulse::after {
     animation: none !important;
   }
+  .mkt-pulse::after { opacity: 0; }
   .mkt-meteor { display: none; }
 }
 

@@ -41,7 +41,7 @@ export function HowItWorks() {
               src={askAi}
               alt="Ask AI answering “What's urgent?” with a list of the team's most urgent open issues, each linked."
               placeholder="blur"
-              sizes="(min-width: 1024px) 640px, 100vw"
+              sizes="(min-width: 1024px) 640px, (min-width: 672px) 672px, 100vw"
               className="rounded-md"
             />
           </div>

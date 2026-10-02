@@ -119,3 +119,23 @@ test("nothing moves when the visitor asks for reduced motion", async ({ browser 
   expect(motion).toEqual({ animated: 0, meteorsShown: 0 });
   await context.close();
 });
+
+test("a visible control pauses every looping animation (WCAG 2.2.2), and it's remembered", async ({ page }) => {
+  await page.goto("/");
+  const toggle = page.getByRole("banner").getByRole("button", { name: "Pause animations" });
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  const running = () =>
+    page.evaluate(
+      () =>
+        document
+          .getAnimations()
+          .filter((a) => a instanceof CSSAnimation && a.animationName.startsWith("mkt-") && a.timeline instanceof DocumentTimeline)
+          .filter((a) => a.playState === "running").length,
+    );
+  await expect.poll(running).toBe(0);
+  await page.reload();
+  await expect(page.getByRole("banner").getByRole("button", { name: "Pause animations" })).toHaveAttribute("aria-pressed", "true");
+  await expect.poll(running).toBe(0);
+});

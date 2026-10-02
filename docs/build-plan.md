@@ -15634,3 +15634,9 @@ Requested 2026-10-02, modelled on the Skillry "bs-cadence-marketing-landing" sty
   - The a11y helper's "animations finished" wait now skips looping and scroll-linked animations (it waited forever otherwise).
   - `pnpm screenshot` retakes both images.
   - Visual baselines are re-recorded under reduced motion, so frames are deterministic.
+- **Review fixes:**
+  - **WCAG 2.2.2 (blocker):** the looping decorations run longer than 5 s, so the header has a **Pause animations** toggle (`motion-toggle.tsx`, `aria-pressed`). It sets `data-motion="paused"` on `.marketing`, which pauses every `mkt-*` animation and hides the meteors. The choice is remembered in localStorage, or in memory when storage is blocked. An e2e test checks it.
+  - **Loops are compositor-only:** the progress bar uses `scaleX`, and the pulse and caret animate opacity and transform on pseudo-elements.
+  - **Vignettes play on view:** they're scroll-timeline driven, so they aren't over before anyone scrolls to them.
+  - **Typing:** monospace font with `steps(23)`.
+  - **a11y test wait:** skips only `mkt-*` animations.

@@ -1,4 +1,4 @@
-import { Bot, Check, MessageSquareText, Sparkles, Workflow } from "lucide-react";
+import { Bot, Check, MessageSquareText, Sparkles, Workflow, type LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { IconChip } from "./effects";
@@ -7,8 +7,7 @@ import { Eyebrow, SectionHeading } from "./marketing-shell";
 // Real workflows in place of testimonials (there are no customers to quote yet).
 // User-controlled tabs, not an auto-rotating carousel: moving content must be pausable.
 
-type Step = { text: string };
-const WORKFLOWS: { id: string; label: string; icon: typeof Bot; title: string; steps: Step[]; panel: ReactNode }[] = [
+const WORKFLOWS: { id: string; label: string; icon: LucideIcon; title: string; steps: { text: string }[]; panel: ReactNode }[] = [
   {
     id: "teammate",
     label: "Hand off a spec",

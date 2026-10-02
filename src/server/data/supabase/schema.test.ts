@@ -976,3 +976,59 @@ describe("function grants", () => {
     ).rejects.toThrow(/permission denied/);
   });
 });
+
+describe("API role privileges", () => {
+  let db: PGlite;
+  beforeAll(async () => {
+    db = await createTestDb();
+    // A table created after the migrations, like any future one.
+    await db.exec("create table public.later_table (id int primary key); alter table public.later_table enable row level security;");
+  });
+
+  const tables = async () =>
+    (await db.query<{ name: string }>("select tablename as name from pg_tables where schemaname = 'public'")).rows.map((r) => r.name);
+
+  it("gives signed-out visitors no table privileges at all, now or for future tables", async () => {
+    const list = await tables();
+    expect(list.length).toBeGreaterThanOrEqual(15);
+    for (const table of list) {
+      for (const privilege of ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"]) {
+        const row = await one<{ ok: boolean }>(db, "select has_table_privilege('anon', $1, $2) as ok", [`public.${table}`, privilege]);
+        expect(row.ok, `anon ${privilege} on ${table}`).toBe(false);
+      }
+    }
+  });
+
+  it("never lets signed-in users truncate (which skips RLS), maintain (lock, vacuum) or add triggers", async () => {
+    for (const table of await tables()) {
+      for (const privilege of ["TRUNCATE", "TRIGGER", "REFERENCES", "MAINTAIN"]) {
+        const row = await one<{ ok: boolean }>(db, "select has_table_privilege('authenticated', $1, $2) as ok", [`public.${table}`, privilege]);
+        expect(row.ok, `authenticated ${privilege} on ${table}`).toBe(false);
+      }
+    }
+    await expect(
+      asUser(db, await createUser(db, "truncater@example.test"), (tx) => tx.query("truncate public.tasks")),
+    ).rejects.toThrow(/permission denied/);
+  });
+
+  it("doesn't let signed-out visitors call functions added later", async () => {
+    await db.exec("create function public.later_fn() returns int language sql as 'select 1';");
+    // Supabase's default grants anon EXECUTE on new public functions; the
+    // migration drops that (RPCs then revoke PUBLIC and grant authenticated).
+    const before = await one<{ ok: boolean }>(db, "select has_function_privilege('anon', 'public.later_fn()', 'execute') as ok");
+    await db.exec("revoke all on function public.later_fn() from public;");
+    const after = await one<{ ok: boolean }>(db, "select has_function_privilege('anon', 'public.later_fn()', 'execute') as ok");
+    expect(after.ok).toBe(false);
+    // Only PUBLIC's built-in default remained before that revoke, never an anon grant of its own.
+    const direct = await db.query("select 1 from pg_proc p, aclexplode(p.proacl) a where p.proname = 'later_fn' and a.grantee = 'anon'::regrole");
+    expect(direct.rows).toEqual([]);
+    expect(before.ok).toBe(true);
+  });
+
+  it("keeps row-level security on for every table", async () => {
+    const rows = await db.query<{ name: string; rls: boolean }>(
+      "select c.relname as name, c.relrowsecurity as rls from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname in ('public', 'private') and c.relkind = 'r'",
+    );
+    expect(rows.rows.filter((r) => !r.rls).map((r) => r.name)).toEqual([]);
+  });
+});

@@ -8,7 +8,7 @@ export function SiteFooter() {
       <div className="text-muted-foreground mx-auto flex max-w-6xl flex-col gap-6 px-4 py-10 text-sm sm:flex-row sm:items-center sm:justify-between sm:px-6">
         <div className="flex items-center gap-3">
           <Logo className="text-foreground" />
-          <span className="font-mono text-xs">© {new Date().getFullYear()}</span>
+          <span data-copyright-year className="font-mono text-xs">© {new Date().getFullYear()}</span>
         </div>
         <nav aria-label="Footer" className="flex gap-6">
           <Link href={PRICING_PATH} className="hover:text-foreground transition-colors">

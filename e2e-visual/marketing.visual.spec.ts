@@ -8,7 +8,11 @@ for (const width of [375, 768, 1440]) {
       await page.setViewportSize({ width, height: 900 });
       await page.goto(path);
       await page.evaluate(() => document.fonts.ready);
-      await expect(page).toHaveScreenshot(`${name}-${width}.png`, { fullPage: true });
+      // The footer year changes every January; keep it out of the comparison.
+      await expect(page).toHaveScreenshot(`${name}-${width}.png`, {
+        fullPage: true,
+        mask: [page.locator("[data-copyright-year]")],
+      });
     });
   }
 }

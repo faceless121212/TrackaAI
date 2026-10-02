@@ -17,8 +17,8 @@ const ROWS: { label: string; value: (plan: Plan) => Cell }[] = [
 ];
 
 function Value({ cell }: { cell: Cell }) {
-  if (cell === true) return <Check className="text-primary mx-auto size-4" aria-label="Included" />;
-  if (cell === false) return <Minus className="text-muted-foreground mx-auto size-4" aria-label="Not included" />;
+  if (cell === true) return <Check className="text-primary mx-auto size-4" role="img" aria-label="Included" />;
+  if (cell === false) return <Minus className="text-muted-foreground mx-auto size-4" role="img" aria-label="Not included" />;
   return <span className="tabular-nums">{cell}</span>;
 }
 

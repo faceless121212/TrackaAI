@@ -48,7 +48,7 @@ export function Hero() {
 
       <div className="relative mx-auto mt-16 max-w-6xl px-4 sm:mt-20 sm:px-6">
         <div aria-hidden className="bg-mkt-glow absolute inset-x-16 -top-10 h-40 rounded-full blur-3xl" />
-        <div className="border-mkt-line bg-mkt-surface/60 relative rounded-2xl border p-1.5 shadow-2xl shadow-black/60 [mask-image:linear-gradient(to_bottom,black_75%,transparent)] sm:p-2">
+        <div className="border-mkt-line bg-mkt-surface/60 relative rounded-2xl border p-1.5 shadow-mkt-shadow shadow-2xl [mask-image:linear-gradient(to_bottom,black_75%,transparent)] sm:p-2">
           <Image
             src={dashboard}
             alt="A TrackaAI board: Backlog, Todo, In Progress, In Review and Done columns with prioritised, labelled issues assigned to teammates and an AI teammate."

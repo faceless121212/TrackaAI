@@ -62,6 +62,7 @@ export default async function PricingPage() {
             {team && <p className="text-muted-foreground text-sm">Showing plans for {team.name}.</p>}
           </div>
           <div className="mt-14">
+            <h2 className="sr-only">Plans</h2>
             <PricingTable current={team?.plan} actions={actions} />
           </div>
           <p className="text-muted-foreground mt-6 text-center text-sm">

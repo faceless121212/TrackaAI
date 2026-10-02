@@ -10,6 +10,7 @@
   --color-mkt-line: var(--mkt-line);
   --color-mkt-accent: var(--mkt-accent);
   --color-mkt-glow: var(--mkt-glow);
+  --color-mkt-shadow: var(--mkt-shadow);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
@@ -149,6 +150,7 @@
   --mkt-line: oklch(1 0 0 / 8%);
   --mkt-accent: oklch(0.72 0.15 285);
   --mkt-glow: oklch(0.55 0.2 285 / 35%);
+  --mkt-shadow: oklch(0 0 0 / 60%);
   --background: var(--mkt-bg);
   --card: var(--mkt-surface);
   --border: var(--mkt-line);

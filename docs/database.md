@@ -6,8 +6,8 @@ Hosted Supabase project **TrackaAI** (`ddtrhzyvyweexveqycyx`). Everything below 
 
 | Schema | Owner | What's in it |
 |---|---|---|
-| `public` | **ours** | The app's 14 tables, plus the RPC functions the app calls. The only schema the API exposes. |
-| `private` | **ours** | Helpers the API can't reach: RLS helper functions (`is_member`, `is_manager`, `team_role`, `team_of_*`, `shares_team`, `assert_actor`, `plan_limit`, `assert_worker`) and the `worker_secrets` table. |
+| `public` | **ours** | The app's 14 tables, the RPC functions the app calls, and two trigger functions (`handle_new_user`, `touch_updated_at`). The only schema the API exposes. |
+| `private` | **ours** | Helpers the API can't call directly: RLS helpers (`is_member`, `is_manager`, `team_role`, `team_of_*`, `shares_team`), checks (`assert_actor`, `assert_worker`, `check_task_refs`), plan limits (`plan_limit`, `assert_within_plan`, the `enforce_*_limit` triggers), and the `worker_secrets` table. |
 | `auth` | Supabase | Accounts, sessions, identities (27 tables). Managed by Supabase Auth; the app never writes to it directly. |
 | `storage` | Supabase | File storage (8 tables). Not used by TrackaAI yet. |
 | `realtime` | Supabase | Realtime subscriptions (9 tables). The board's live updates use it. |
@@ -45,14 +45,14 @@ There are three API roles:
 - **`authenticated`**: a signed-in user.
 - **`service_role`**: the secret key. The app doesn't use it.
 
-**Row-level security (RLS) is on for every table.** Every policy is for `authenticated` and is scoped to the caller's own team. `anon` has **no table privileges at all** (migration `20261002140000`). Nobody has `TRUNCATE`, `TRIGGER` or `REFERENCES`.
+**Row-level security (RLS) is on for every table.** Every app policy is for `authenticated` and is scoped to the caller's own team; `worker_secrets` has one deny-all policy. `anon` has **no table privileges at all**, and neither `anon` nor `authenticated` has `TRUNCATE`, `TRIGGER`, `REFERENCES` or `MAINTAIN` (migrations `20261002140000` and `20261002142000`, which also cover future tables). Only `postgres` and `service_role` keep full access.
 
 "Member" means any role in the team; "manager" means owner or admin.
 
 | Table | Read | Create | Change | Delete |
 |---|---|---|---|---|
 | `profiles` | yourself and your teammates | via sign-up trigger | yourself (name, avatar, theme) | — |
-| `teams` | members | `create_team` RPC | managers (name, slug); plan via `set_team_plan` (owner) | owner |
+| `teams` | members | `create_team` RPC | managers (name only); plan via `set_team_plan` (owner) | owner |
 | `memberships` | members | `create_team` / `accept_invite` RPCs | owner any role; admin only members; never the owner row | managers remove; anyone leaves; never the owner |
 | `invites` | managers | managers (as themselves) | managers | managers |
 | `workspaces` | members | managers | managers | managers |
@@ -71,7 +71,7 @@ Plan limits (members, workspaces, AI runs) are enforced in the database as well 
 
 ## Functions the app calls (RPCs)
 
-All of these are callable only when signed in. Each `SECURITY DEFINER` function checks that the caller is who they say (`assert_actor`) and belongs to the team, so the Supabase advisor's "signed-in users can execute SECURITY DEFINER function" notices are expected.
+All of these are callable only when signed in. The `SECURITY DEFINER` ones check who is calling: the functions that act for someone call `assert_actor` and check team membership or role; `invite_preview` needs the invite's secret token; `team_usage` answers only members or the invitee. So the Supabase advisor's "signed-in users can execute SECURITY DEFINER function" notices are expected.
 
 | Function | Does |
 |---|---|

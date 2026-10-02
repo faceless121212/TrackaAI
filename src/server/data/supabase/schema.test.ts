@@ -999,9 +999,9 @@ describe("API role privileges", () => {
     }
   });
 
-  it("never lets signed-in users truncate (which skips RLS) or add triggers", async () => {
+  it("never lets signed-in users truncate (which skips RLS), maintain (lock, vacuum) or add triggers", async () => {
     for (const table of await tables()) {
-      for (const privilege of ["TRUNCATE", "TRIGGER", "REFERENCES"]) {
+      for (const privilege of ["TRUNCATE", "TRIGGER", "REFERENCES", "MAINTAIN"]) {
         const row = await one<{ ok: boolean }>(db, "select has_table_privilege('authenticated', $1, $2) as ok", [`public.${table}`, privilege]);
         expect(row.ok, `authenticated ${privilege} on ${table}`).toBe(false);
       }
@@ -1009,6 +1009,20 @@ describe("API role privileges", () => {
     await expect(
       asUser(db, await createUser(db, "truncater@example.test"), (tx) => tx.query("truncate public.tasks")),
     ).rejects.toThrow(/permission denied/);
+  });
+
+  it("doesn't let signed-out visitors call functions added later", async () => {
+    await db.exec("create function public.later_fn() returns int language sql as 'select 1';");
+    // Supabase's default grants anon EXECUTE on new public functions; the
+    // migration drops that (RPCs then revoke PUBLIC and grant authenticated).
+    const before = await one<{ ok: boolean }>(db, "select has_function_privilege('anon', 'public.later_fn()', 'execute') as ok");
+    await db.exec("revoke all on function public.later_fn() from public;");
+    const after = await one<{ ok: boolean }>(db, "select has_function_privilege('anon', 'public.later_fn()', 'execute') as ok");
+    expect(after.ok).toBe(false);
+    // Only PUBLIC's built-in default remained before that revoke, never an anon grant of its own.
+    const direct = await db.query("select 1 from pg_proc p, aclexplode(p.proacl) a where p.proname = 'later_fn' and a.grantee = 'anon'::regrole");
+    expect(direct.rows).toEqual([]);
+    expect(before.ok).toBe(true);
   });
 
   it("keeps row-level security on for every table", async () => {

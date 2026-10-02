@@ -111,6 +111,7 @@ export function planFeatures(plan: Plan): { label: string; included: boolean }[]
     { label: people, included: true },
     { label: workspaces, included: true },
     { label: ai, included: true },
+    { label: "Ask AI chat", included: true },
     { label: "Board copilot", included: features.copilot },
     { label: "AI teammate", included: features.aiTeammate },
   ];

@@ -57,6 +57,7 @@ describe("plan limits", () => {
       { label: "Just you", included: true },
       { label: "1 workspace", included: true },
       { label: "10 AI runs / month", included: true },
+      { label: "Ask AI chat", included: true },
       { label: "Board copilot", included: false },
       { label: "AI teammate", included: false },
     ]);

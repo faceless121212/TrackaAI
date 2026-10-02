@@ -26,7 +26,7 @@ for (const theme of ["dark", "light"] as const) {
     });
 
     test("public pages", async ({ page }) => {
-      for (const path of ["/sign-in", "/sign-up", "/pricing", "/no-such-page"]) {
+      for (const path of ["/", "/sign-in", "/sign-up", "/pricing", "/no-such-page"]) {
         await page.goto(path);
         await expectAccessible(page, path);
       }

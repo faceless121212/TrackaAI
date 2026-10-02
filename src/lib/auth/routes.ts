@@ -5,16 +5,19 @@ export const SIGN_OUT_PATH = "/sign-out";
 export const CHECK_EMAIL_PATH = "/sign-up/check-email";
 export const AUTH_CALLBACK_PATH = "/auth/callback";
 export const PRICING_PATH = "/pricing";
+export const LANDING_PATH = "/";
 
 // Signed-in users are bounced from these to "/".
 const PUBLIC_PATHS = [SIGN_IN_PATH, SIGN_UP_PATH];
 // These skip the session check entirely (e.g. clearing a stale cookie).
 const OPEN_PATHS = [SIGN_OUT_PATH, AUTH_CALLBACK_PATH];
 // For everyone, signed in or not: the session is refreshed, nobody is redirected.
-const SESSION_OPTIONAL_PATHS = [PRICING_PATH];
+// ("/" shows visitors the landing page; the page itself sends members into the app.)
+const SESSION_OPTIONAL_PATHS = [PRICING_PATH, LANDING_PATH];
 
 function matches(paths: string[], pathname: string): boolean {
-  return paths.some((path) => pathname === path || pathname.startsWith(`${path}/`));
+  // "/" matches only itself, not every path under it.
+  return paths.some((path) => pathname === path || (path !== "/" && pathname.startsWith(`${path}/`)));
 }
 
 export function isPublicPath(pathname: string): boolean {

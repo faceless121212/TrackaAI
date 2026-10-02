@@ -12,7 +12,9 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:supabase": "SUPABASE_INTEGRATION=1 vitest run integration --testTimeout=30000",
-    "test:smoke": "playwright test -c playwright.smoke.config.ts"
+    "test:smoke": "playwright test -c playwright.smoke.config.ts",
+    "screenshot": "playwright test -c playwright.marketing.config.ts --grep @screenshot",
+    "test:visual": "playwright test -c playwright.marketing.config.ts --grep @visual"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.68",

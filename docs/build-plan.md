@@ -15568,3 +15568,19 @@ Tests: PGlite (wrong, empty, missing and unconfigured tokens refused; the table 
 Gotcha: this changes the RPC signatures, so a server still running older code can't finish teammate runs until it's rebuilt.
 
 Next in M10: deploying to Vercel with production settings (needs the owner's Vercel account).
+
+# Ask AI — a team-wide, read-only chat about issues
+
+Requested on 2026-10-02: "chat with my issues to see what needs to be resolved, what's urgent, who has which assigned issues", with the AI SDK and Sonnet 5.5. Decisions: read-only (changes stay with the board Copilot), its own page in the sidebar, on every plan and metered per message.
+
+- **Page:** `/[team]/ask` (`AskChat`), with starter questions. The conversation lives in the tab; nothing is saved.
+- **Route:** `/api/ai/ask` with `claude-sonnet-5-5` (`ASK_MODEL`).
+  - Each message reserves one run (`feature = 'ask'`, migration `20261002120000_ask_usage`), so the monthly limits and the 20-a-minute limit apply.
+  - Request size and length limits are shared with the copilot (`parseChatRequest`).
+- **Tools** (`src/server/ai/ask/tools.ts`), loading the team's data once per request with the caller's repositories:
+  - `search_issues`: board, state (open/backlog/todo/started/review/done/canceled, from column names via `statusOf`, now in the domain), column, priority, assignee (me/unassigned/name/AI teammate), label, overdue, due before, and text. Open issues come first, most urgent first.
+  - `get_issue`: one issue with its description, sub-tasks and latest comments.
+  - `team_overview`: counts per board/column, per assignee, and totals.
+- **Links:** every result carries an in-app `url`, and the model is told to link issues with it. Untrusted Markdown keeps app-relative links in the app; everything else still opens apart with `nofollow`.
+- **Data:** `tasks.listForTeam` loads the team's tasks in one embedded select, capped at 1000 (PostgREST's max rows). The tools say when the cap is reached.
+- **Tests:** tool tests cover filters, ordering, scoping, the other team and unknown names; schema test for the new feature; mock and live `listForTeam` tests; e2e with a scripted mock model (urgent issues → link → task opens); an axe check of the page; and a real-model step in `pnpm test:smoke`.

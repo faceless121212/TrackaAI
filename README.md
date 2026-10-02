@@ -78,11 +78,11 @@ All of them go in `.env.local` locally, and in the Vercel project settings in pr
 | `DATA_BACKEND` | always | `mock` (default) or `supabase` |
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase | Public value (Project Settings → API) |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Supabase | Public value. The secret key is never needed |
-| `APP_URL` | production | The site's public address, e.g. `https://trackaai.vercel.app`. Used in confirmation and invite links |
+| `APP_URL` | production | The site's public address, e.g. `https://trackaai.vercel.app`. Used in confirmation and invite links. If it's missing on Vercel, the deployment's own address is used (handy for preview deployments) |
 | `ANTHROPIC_API_KEY` | AI | **Secret.** Without it, the AI features are hidden |
 | `TOOL_APPROVAL_SECRET` | Copilot in production | **Secret**, any random string of 32+ characters. Without it the copilot is hidden in production |
 | `AGENT_WORKER_SECRET` | AI teammates (Supabase) | **Secret**, 32+ characters. The database stores its SHA-256 in `private.worker_secrets` |
-| `SESSION_SECRET`, `MOCK_DB_PATH` | mock backend | Local development only |
+| `SESSION_SECRET`, `MOCK_DB_PATH` | mock backend | Local development only. The app refuses the mock backend on Vercel |
 | `AI_MOCK`, `DEBUG_SUPABASE` | development | Mock AI model / log every Supabase request |
 
 Never put a secret in a variable starting with `NEXT_PUBLIC_`: those are sent to the browser.
@@ -93,14 +93,14 @@ Never put a secret in a variable starting with `NEXT_PUBLIC_`: those are sent to
 2. Set `DATA_BACKEND=supabase` and the two public values above.
 3. For local development only, run `supabase/seed.sql`. It creates the confirmed accounts `demo@trackaai.test` and `mate@trackaai.test` (password `demo-password`) and a demo team. **Never seed a public site:** that password is public.
 4. In the dashboard (Authentication), keep **Confirm email** on and turn on **Leaked password protection**. Connect an **SMTP** provider so confirmation emails reach everyone; Supabase's built-in mailer only sends to your project team's addresses.
-5. For AI teammates, set `AGENT_WORKER_SECRET` and store its SHA-256 (the SQL is in the header of `supabase/migrations/20261001100000_agent_worker_token.sql`).
+5. For AI teammates, set `AGENT_WORKER_SECRET` and store its SHA-256 in the database. Get the hash with `printf %s "$AGENT_WORKER_SECRET" | shasum -a 256` (`printf`, not `echo`: a trailing newline changes the hash). Then run the `insert … on conflict` from the header of `supabase/migrations/20261001100000_agent_worker_token.sql` in the SQL editor.
 
 ## Deploying to Vercel
 
 Vercel builds the app straight from GitHub and redeploys on every push to `main`.
 
-1. **Import the repo:** at [vercel.com/new](https://vercel.com/new), choose **Import Git Repository**, pick `faceless121212/TrackaAI`, and keep the detected settings (framework Next.js, pnpm, Node 22).
-2. **Add the environment variables** (Settings → Environment Variables, for Production):
+1. **Import the repo:** at [vercel.com/new](https://vercel.com/new), choose **Import Git Repository**, pick `faceless121212/TrackaAI`, and keep the detected settings (framework Next.js, pnpm, Node 22). Leave **Fluid compute** on (the default): the board page can take up to 120 s to stream, which the Hobby plan only allows with Fluid compute.
+2. **Add the environment variables** (Settings → Environment Variables). Tick **Production** and **Preview** for all of them except `APP_URL`, which is Production only; previews use their own address automatically. Without `DATA_BACKEND=supabase` a deployment refuses to start, since the local JSON backend can't run on Vercel.
    - `DATA_BACKEND` = `supabase`
    - `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`: the same values as in `.env.local`
    - `APP_URL` = your Vercel address, e.g. `https://trackaai.vercel.app` (no trailing slash)
@@ -108,7 +108,7 @@ Vercel builds the app straight from GitHub and redeploys on every push to `main`
 3. **Deploy.** The first build takes a couple of minutes.
 4. **Tell Supabase about the new address** (Authentication → URL Configuration):
    - set **Site URL** to the Vercel address;
-   - add `https://<your-domain>/auth/callback` to **Redirect URLs**, so email confirmation links come back to the live site.
+   - add `https://<your-domain>/auth/callback**` to **Redirect URLs** (the `**` keeps the `?next=` part, e.g. for invite links), so email confirmation links come back to the live site. For previews, also add `https://*-<your-vercel-team>.vercel.app/auth/callback**`.
 5. **Before sharing the link,** remove the development seed accounts (`demo@` / `mate@trackaai.test`) and their `acme` team, or at least change their password. Anyone who reads this README could otherwise sign in.
 
 After that, each merged pull request deploys automatically. Pull requests also get their own preview URLs.

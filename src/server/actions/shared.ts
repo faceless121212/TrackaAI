@@ -3,7 +3,7 @@ import { headers } from "next/headers";
 import { z } from "zod";
 import type { CreateWorkspaceInput, Invite, Role, Team, UpdateTaskInput } from "@/lib/domain";
 import { invalidTaskRef } from "@/lib/domain";
-import { resolveAppOrigin } from "@/lib/app-url";
+import { configuredAppUrl, resolveAppOrigin } from "@/lib/app-url";
 import type { ActionResult, FormState } from "@/lib/forms";
 import { invitePath, settingsPath } from "@/lib/paths";
 import { ForbiddenError, can } from "@/server/auth/permissions";
@@ -75,7 +75,7 @@ export async function assertTaskRefs(teamId: string, patch: Pick<UpdateTaskInput
 export async function absoluteUrl(path: string): Promise<string> {
   const h = await headers();
   const origin = resolveAppOrigin({
-    appUrl: process.env.APP_URL,
+    appUrl: configuredAppUrl({ APP_URL: process.env.APP_URL, VERCEL_URL: process.env.VERCEL_URL }),
     host: h.get("x-forwarded-host") ?? h.get("host"),
     proto: h.get("x-forwarded-proto"),
     production: process.env.NODE_ENV === "production",

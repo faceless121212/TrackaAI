@@ -15614,3 +15614,23 @@ Spec: `docs/superpowers/specs/2026-10-02-marketing-site-design.md` (approved 202
   - `/` is in the a11y spec too.
   - `pnpm test:visual` (local, `playwright.marketing.config.ts`): full-page baselines at three widths, kept out of CI because macOS and Linux render fonts differently.
   - Reviewed by eye at each width; fixes from that pass: an orphaned last feature card, bare cards next to ones with visuals, stretched keycaps, a wrapping price unit, and a five-line headline on phones.
+
+# M11 follow-up: "Cadence" landing page redesign
+
+Requested 2026-10-02, modelled on the Skillry "bs-cadence-marketing-landing" style. It was built natively, not by installing the skill: the skill needs a third-party installer plus a Skillry sign-in, and it outputs a standalone HTML file rather than app components. The user's decisions: build it natively, no testimonials (there are no customers to quote, so real workflows take their place), and monthly pricing only.
+
+- **Look:** the `.marketing` tokens move to charcoal with one cyan accent (`--mkt-accent`), plus `--mkt-bezel` for the laptop. Headlines run from white into cyan; the hero highlights "AI teammates" in the accent.
+- **Effects** (`effects.tsx`):
+  - `IconChip`: raised 3D tiles on every section and feature.
+  - `Meteors`: diagonal light streaks.
+  - `AmbientLight`: a diagonal glow band plus a top radial glow.
+- **Motion** (CSS in `globals.css`, no JavaScript):
+  - **Scroll-linked:** `.mkt-tilt` (the hero screenshot straightens as it scrolls in) and `.mkt-lid` (the laptop lid opens). Both use `animation-timeline: view()` under `@supports`, so other browsers get the flat, open end state.
+  - **Feature animations:** `.mkt-typing`, `.mkt-rise`, `.mkt-pulse`, `.mkt-fill`.
+  - Everything is off under `prefers-reduced-motion`, and meteors are hidden; an e2e test checks that.
+- **Sections:** hero; feature bento with animations; **Workflows** (shadcn Tabs, user-controlled because WCAG 2.2.2 rules out an auto-rotating carousel); How it works around a CSS laptop showing `public/marketing/ask-ai.png` (Ask AI answering "What's urgent?", from the mock model); pricing; FAQ; closing call to action. The hero and header calls to action now share the "Start free" label.
+- **Tests:**
+  - The marketing spec covers the new sections and image, keyboard tab switching, and reduced motion.
+  - The a11y helper's "animations finished" wait now skips looping and scroll-linked animations (it waited forever otherwise).
+  - `pnpm screenshot` retakes both images.
+  - Visual baselines are re-recorded under reduced motion, so frames are deterministic.

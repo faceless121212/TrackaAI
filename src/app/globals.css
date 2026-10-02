@@ -11,6 +11,7 @@
   --color-mkt-accent: var(--mkt-accent);
   --color-mkt-glow: var(--mkt-glow);
   --color-mkt-shadow: var(--mkt-shadow);
+  --color-mkt-bezel: var(--mkt-bezel);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
@@ -140,20 +141,83 @@
 }
 
 /*
- * Marketing pages (/, /pricing): always dark, in the spirit of Linear —
- * near-black with a cool tint, hairline borders, one indigo-violet accent.
+ * Marketing pages (/, /pricing): always dark, in the "Cadence" style —
+ * charcoal ground, one cyan accent, gradient headlines, diagonal ambient light.
  * Used with the `dark` class so every shadcn token resolves to its dark value.
  */
 .marketing {
-  --mkt-bg: oklch(0.13 0.006 285);
-  --mkt-surface: oklch(0.17 0.008 285);
-  --mkt-line: oklch(1 0 0 / 8%);
-  --mkt-accent: oklch(0.72 0.15 285);
-  --mkt-glow: oklch(0.55 0.2 285 / 35%);
+  --mkt-bg: oklch(0.17 0.005 250);
+  --mkt-surface: oklch(0.21 0.007 250);
+  --mkt-line: oklch(1 0 0 / 9%);
+  --mkt-accent: oklch(0.82 0.13 205);
+  --mkt-glow: oklch(0.72 0.14 210 / 28%);
   --mkt-shadow: oklch(0 0 0 / 60%);
+  --mkt-bezel: oklch(0.12 0.004 250);
   --background: var(--mkt-bg);
   --card: var(--mkt-surface);
   --border: var(--mkt-line);
+}
+
+/* Motion. Everything here is decorative: off under reduced motion, and the
+   scroll-driven parts fall back to their final (flat, open) state where
+   scroll timelines aren't supported. */
+@keyframes mkt-meteor {
+  0% { transform: translate3d(0, 0, 0) rotate(215deg); opacity: 0; }
+  10% { opacity: 1; }
+  70% { opacity: 1; }
+  100% { transform: translate3d(-520px, 520px, 0) rotate(215deg); opacity: 0; }
+}
+.mkt-meteor {
+  animation: mkt-meteor var(--mkt-meteor-duration, 7s) linear infinite;
+  animation-delay: var(--mkt-meteor-delay, 0s);
+}
+
+@keyframes mkt-tilt {
+  from { transform: perspective(1600px) rotateX(26deg) scale(0.92); }
+  to { transform: perspective(1600px) rotateX(0deg) scale(1); }
+}
+@keyframes mkt-lid {
+  from { transform: perspective(1400px) rotateX(-88deg); }
+  to { transform: perspective(1400px) rotateX(0deg); }
+}
+@supports (animation-timeline: view()) {
+  .mkt-tilt {
+    animation: mkt-tilt linear both;
+    animation-timeline: view();
+    animation-range: entry 0% cover 45%;
+  }
+  .mkt-lid {
+    transform-origin: 50% 100%;
+    animation: mkt-lid linear both;
+    animation-timeline: view();
+    animation-range: entry 10% cover 50%;
+  }
+}
+
+@keyframes mkt-type { from { width: 0; } }
+@keyframes mkt-caret { 50% { border-color: transparent; } }
+@keyframes mkt-rise { from { opacity: 0; transform: translateY(6px); } }
+@keyframes mkt-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--mkt-glow); }
+  50% { box-shadow: 0 0 0 6px transparent; }
+}
+@keyframes mkt-fill { from { width: 8%; } to { width: 92%; } }
+
+.mkt-typing {
+  overflow: hidden;
+  white-space: nowrap;
+  border-right: 2px solid var(--mkt-accent);
+  animation: mkt-type 2.4s steps(26) 0.4s both, mkt-caret 0.9s step-end infinite;
+}
+.mkt-rise { animation: mkt-rise 0.6s ease-out both; animation-delay: var(--mkt-delay, 0s); }
+.mkt-pulse { animation: mkt-pulse 2.4s ease-in-out infinite; }
+.mkt-fill { animation: mkt-fill 3.2s ease-in-out infinite alternate; }
+
+@media (prefers-reduced-motion: reduce) {
+  .mkt-meteor, .mkt-tilt, .mkt-lid, .mkt-typing, .mkt-rise, .mkt-pulse, .mkt-fill {
+    animation: none !important;
+  }
+  .mkt-meteor { display: none; }
 }
 
 @layer base {

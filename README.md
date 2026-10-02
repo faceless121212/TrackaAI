@@ -2,6 +2,7 @@
 
 Linear-style project management for teams, with AI agents.
 
+- Database reference (tables, RLS, functions): `docs/database.md`.
 - Product spec: [docs/prd.md](docs/prd.md)
 - Roadmap: [docs/plan.md](docs/plan.md) · Current build plan: [docs/build-plan.md](docs/build-plan.md)
 

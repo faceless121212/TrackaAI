@@ -11,7 +11,9 @@ import { createSupabaseRepositories } from "./repositories";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
-const PASSWORD = "demo-password"; // supabase/seed.sql (development accounts)
+// supabase/seed.sql sets "demo-password"; a project that's public changes it and
+// keeps the new one in .env.local as DEMO_PASSWORD.
+const PASSWORD = process.env.DEMO_PASSWORD || "demo-password";
 
 async function signedIn(email: string) {
   const client = createClient<Database>(url!, key!, { auth: { persistSession: false, autoRefreshToken: false } });

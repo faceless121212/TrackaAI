@@ -15591,3 +15591,26 @@ Requested on 2026-10-02: "chat with my issues to see what needs to be resolved, 
   - Past 1000 tasks, the least recently updated drop out first, and old overdue issues are among them (the tools say so).
   - "Today" is the UTC date, as in the Copilot.
   - `team_overview` groups people by display name.
+
+# M11 — Marketing site
+
+Spec: `docs/superpowers/specs/2026-10-02-marketing-site-design.md` (approved 2026-10-02; built with the design-elevation skill).
+
+- **`/`:** visitors get the landing page; members are redirected to their first team, as before.
+  - `/` is session-optional in `src/lib/auth/routes.ts`. It matches exactly, never as a prefix.
+  - A dead mock-backend cookie is cleared via `/sign-out` first, which keeps "stale cookie" from looping.
+- **Look:** marketing pages are always dark.
+  - `MarketingShell` sets `dark marketing`: shadcn tokens resolve dark, and `.marketing` tints them (near-black `--mkt-bg`, hairline `--mkt-line`, one indigo-violet `--mkt-accent`, `--mkt-glow`). All are exposed as Tailwind colours (`bg-mkt-surface`, `text-mkt-accent`…).
+  - Headlines use a white-to-grey gradient and tight tracking; labels are Geist Mono.
+- **Sections:** hero (AI angle, product screenshot in a glowing frame), feature grid (AI teammates, Copilot, Ask AI, task writer, keyboard; decorative mini-UIs are `aria-hidden`), how it works, pricing, FAQ (native `<details>`), closing call to action.
+- **Pricing:** `PricingTable` is shared by the landing page, `/pricing` and Settings → Billing.
+  - It's restyled: a "Most popular" badge on Pro, the price unit on its own line so it never wraps, and "Ask AI chat" added to `planFeatures`.
+  - `/pricing` adds `PlanComparison` (a real `<table>`) and a pricing FAQ, and keeps its signed-in behaviour.
+- **Screenshot:** `public/marketing/dashboard.png` (3760×1360, 2x) of the **showcase seed** (`MOCK_SEED=showcase`: four people, an AI teammate, 14 issues; the dev/e2e seed stays small).
+  - The first capture was taken with the Playwright MCP.
+  - `pnpm screenshot` retakes it. Due dates are relative to today, so a retake changes the dates.
+- **Quality:**
+  - `e2e/marketing.spec.ts` (CI): axe on both pages, no sideways scroll at 375/768/1440, images load, no console errors, title and sections, calls to action and anchors, FAQ by keyboard, members skip the landing page.
+  - `/` is in the a11y spec too.
+  - `pnpm test:visual` (local, `playwright.marketing.config.ts`): full-page baselines at three widths, kept out of CI because macOS and Linux render fonts differently.
+  - Reviewed by eye at each width; fixes from that pass: an orphaned last feature card, bare cards next to ones with visuals, stretched keycaps, a wrapping price unit, and a five-line headline on phones.

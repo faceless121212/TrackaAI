@@ -25,6 +25,8 @@ Also on Pro, managers add **AI teammates** in **Settings → AI teammates** (a n
 
 ### Checking a live setup
 
+**Marketing site:** `/` is a dark landing page for visitors (members go straight to their team), and `/pricing` compares the plans. `pnpm screenshot` retakes the landing page's product shot from a fuller demo team (`MOCK_SEED=showcase`). `pnpm test:visual` compares both pages against pixel baselines at three widths; it runs locally only, so after an intended design change run `pnpm test:visual --update-snapshots` and review the images.
+
 `pnpm test:smoke` goes through every main feature once, AI included, against a running server on the Supabase backend: sign-in, board, tasks, comments, the AI writer, breakdown, copilot, Ask AI and an AI teammate, settings and pricing. It signs in as the seeded demo account (or `SMOKE_EMAIL`/`SMOKE_PASSWORD`), needs its team on Pro, and deletes what it creates. Each run uses five AI runs from that team's monthly allowance. Never seed a public deployment with the demo account: its password is public. Start a production build first (`pnpm build && pnpm start`), then run `SMOKE_URL=http://localhost:3000 pnpm test:smoke`. Each step's time is printed.
 
 `DEBUG_SUPABASE=1` logs every Supabase request with its duration. Each line is a round trip, so a slow page shows up as a long list.

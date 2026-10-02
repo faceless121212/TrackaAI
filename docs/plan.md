@@ -81,7 +81,7 @@ Real Stripe was skipped by decision (2026-09-29): billing is **simulated**, and 
 - Supabase cloud + Vercel deploy, Stripe live keys, Resend domain.
 - Open PRD question #1 (5th AI capability) slotted here or earlier once defined.
 
-## M11 — Marketing site
+## M11 — Marketing site ✅
 - Dark, Linear-style landing page at `/` for signed-out visitors (signed-in users go straight to their team). It leads with the AI angle and includes a Playwright-captured product screenshot, feature highlights, how it works, pricing and an FAQ.
 - Redesigned `/pricing`, sharing the pricing component with the landing page, plus a plan comparison and an FAQ.
 - Playwright checks in CI (axe, overflow at three widths, links, images, console) and local visual snapshots (`pnpm test:visual`).

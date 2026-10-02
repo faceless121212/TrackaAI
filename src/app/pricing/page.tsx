@@ -1,14 +1,20 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { PricingTable } from "@/components/billing/pricing-table";
+import { Faq, PRICING_FAQ } from "@/components/marketing/faq";
+import { Eyebrow, MarketingShell, SectionHeading } from "@/components/marketing/marketing-shell";
+import { PlanComparison } from "@/components/marketing/plan-comparison";
+import { visitorPlanActions } from "@/components/marketing/pricing-section";
 import { Button } from "@/components/ui/button";
 import { PLAN_CATALOG, PLANS, type Plan } from "@/lib/domain";
-import { SIGN_IN_PATH, SIGN_UP_PATH } from "@/lib/auth/routes";
 import { settingsPath } from "@/lib/paths";
 import { getCurrentUser } from "@/server/auth/session";
 import { getRepositories } from "@/server/data";
 
-export const metadata: Metadata = { title: "Pricing" };
+export const metadata: Metadata = {
+  title: "Pricing",
+  description: "Free for solo work, Lite for small teams, Pro for every AI feature. Priced per team, not per seat.",
+};
 
 /** The team the buttons act on: one the user owns (only owners change plans), else their first. */
 async function billingTeam(userId: string) {
@@ -22,38 +28,56 @@ async function billingTeam(userId: string) {
 export default async function PricingPage() {
   const user = await getCurrentUser();
   const team = user ? await billingTeam(user.id) : undefined;
-  const href = team ? settingsPath(team.slug, "billing") : user ? "/" : SIGN_UP_PATH;
 
-  const actions = Object.fromEntries(
-    PLANS.map((plan) => [
-      plan,
-      <Button key={plan} className="w-full" variant={plan === "pro" ? "default" : "outline"} asChild>
-        <Link href={href}>
-          {user ? (plan === team?.plan ? "Your current plan" : `Choose ${PLAN_CATALOG[plan].name}`) : plan === "free" ? "Get started" : `Start with ${PLAN_CATALOG[plan].name}`}
-        </Link>
-      </Button>,
-    ]),
-  ) as Record<Plan, React.ReactNode>;
+  const actions = user
+    ? (Object.fromEntries(
+        PLANS.map((plan) => [
+          plan,
+          <Button key={plan} className="w-full" variant={plan === "pro" ? "default" : "outline"} asChild>
+            <Link href={team ? settingsPath(team.slug, "billing") : "/"}>
+              {plan === team?.plan ? "Your current plan" : `Choose ${PLAN_CATALOG[plan].name}`}
+            </Link>
+          </Button>,
+        ]),
+      ) as Record<Plan, React.ReactNode>)
+    : visitorPlanActions();
 
   return (
-    <main className="mx-auto w-full max-w-5xl space-y-10 px-4 py-10 sm:px-6">
-      <header className="flex items-center justify-between">
-        <Link href="/" className="font-semibold">
-          TrackaAI
-        </Link>
-        <Button variant="ghost" asChild>
-          <Link href={user ? "/" : SIGN_IN_PATH}>{user ? "Open app" : "Sign in"}</Link>
-        </Button>
-      </header>
-      <div className="space-y-2 text-center">
-        <h1 className="text-3xl font-semibold">Simple plans for every team size</h1>
-        <p className="text-muted-foreground">Start free on your own. Upgrade when you bring your team.</p>
-      </div>
-      {team && <p className="text-muted-foreground text-center text-sm">Showing plans for {team.name}.</p>}
-      <PricingTable current={team?.plan} actions={actions} />
-      <p className="text-muted-foreground text-center text-sm">
-        Prices are per team, billed monthly. Billing is simulated in this version: no card is charged.
-      </p>
-    </main>
+    <MarketingShell signedIn={Boolean(user)}>
+      <section aria-labelledby="pricing-title" className="relative isolate overflow-hidden">
+        <div
+          aria-hidden
+          className="absolute inset-x-0 top-0 -z-10 h-[480px] bg-[radial-gradient(55%_60%_at_50%_0%,var(--mkt-glow),transparent_70%)]"
+        />
+        <div className="mx-auto max-w-6xl px-4 pt-20 pb-16 sm:px-6 sm:pt-28">
+          <div className="mx-auto max-w-2xl space-y-4 text-center">
+            <Eyebrow>Pricing</Eyebrow>
+            <h1
+              id="pricing-title"
+              className="from-foreground to-foreground/55 bg-gradient-to-b bg-clip-text text-4xl font-semibold tracking-tight text-balance text-transparent sm:text-6xl"
+            >
+              Simple plans for every team size
+            </h1>
+            <p className="text-muted-foreground text-lg">Start free on your own. Upgrade when you bring your team.</p>
+            {team && <p className="text-muted-foreground text-sm">Showing plans for {team.name}.</p>}
+          </div>
+          <div className="mt-14">
+            <PricingTable current={team?.plan} actions={actions} />
+          </div>
+          <p className="text-muted-foreground mt-6 text-center text-sm">
+            Prices are per team, billed monthly. Billing is simulated in this version: no card is charged.
+          </p>
+        </div>
+      </section>
+
+      <section aria-labelledby="compare-title" className="mx-auto max-w-4xl px-4 py-16 sm:px-6">
+        <div className="mb-10 space-y-4 text-center">
+          <SectionHeading id="compare-title">Compare plans</SectionHeading>
+        </div>
+        <PlanComparison />
+      </section>
+
+      <Faq items={PRICING_FAQ} title="Pricing questions" />
+    </MarketingShell>
   );
 }

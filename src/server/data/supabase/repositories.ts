@@ -369,6 +369,11 @@ export function createSupabaseRepositories(client: () => Promise<Client>): Repos
           throw new ConflictError("email", "Confirm your email first: we sent you a link when you signed up.");
         }
         if (error?.code === "over_request_rate_limit") throw new ConflictError("email", AUTH_EMAIL_ERRORS.over_request_rate_limit);
+        if (error && error.code !== "invalid_credentials") {
+          // An outage or unexpected rejection: don't call the password wrong.
+          console.error("[auth] sign-in failed", error.code ?? error.status, error.message);
+          throw new ConflictError("email", "We couldn't sign you in right now. Please try again in a moment.");
+        }
         if (error || !result.user) return null;
         return getProfile(db, result.user.id);
       },

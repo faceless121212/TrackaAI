@@ -135,7 +135,15 @@ test("a visible control pauses every looping animation (WCAG 2.2.2), and it's re
           .filter((a) => a.playState === "running").length,
     );
   await expect.poll(running).toBe(0);
+  // Paused never hides content: scroll-linked and one-shot effects show their end state.
+  const endState = () =>
+    page.evaluate(() => ({
+      lid: getComputedStyle(document.querySelector(".mkt-lid")!).transform,
+      hiddenRises: [...document.querySelectorAll(".mkt-rise")].filter((el) => getComputedStyle(el).opacity !== "1").length,
+    }));
+  await expect.poll(endState).toEqual({ lid: "none", hiddenRises: 0 });
   await page.reload();
   await expect(page.getByRole("banner").getByRole("button", { name: "Pause animations" })).toHaveAttribute("aria-pressed", "true");
   await expect.poll(running).toBe(0);
+  await expect.poll(endState).toEqual({ lid: "none", hiddenRises: 0 });
 });

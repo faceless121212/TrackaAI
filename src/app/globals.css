@@ -197,18 +197,24 @@
 /* Feature-card vignettes. Compositor-friendly where they loop (transform and
    opacity only); they play when scrolled into view where scroll timelines
    exist, and on load elsewhere. */
-@keyframes mkt-type { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+@keyframes mkt-type { from { width: 0; } to { width: var(--mkt-chars, 23ch); } }
 @keyframes mkt-blink { 50% { opacity: 0; } }
 @keyframes mkt-rise { from { opacity: 0; transform: translateY(6px); } }
 @keyframes mkt-ring { 0% { opacity: 0.9; transform: scale(1); } 100% { opacity: 0; transform: scale(1.35); } }
 @keyframes mkt-fill { from { transform: scaleX(0.08); } to { transform: scaleX(0.92); } }
 
+/* Typing: the inner text widens one monospace character at a time (a one-shot
+   width animation), and the caret on the wrapper follows its edge. */
 .mkt-typing {
-  position: relative;
+  display: inline-block;
+  overflow: hidden;
   white-space: nowrap;
+  vertical-align: bottom;
+  width: var(--mkt-chars, 23ch);
   animation: mkt-type 2.3s steps(23) 0.3s both;
 }
-.mkt-typing::after {
+.mkt-caret { position: relative; display: inline-block; }
+.mkt-caret::after {
   content: "";
   position: absolute;
   top: 0.1em;
@@ -230,24 +236,32 @@
 }
 .mkt-fill { transform-origin: left center; animation: mkt-fill 3.2s ease-in-out infinite alternate; }
 
+/* Where scroll timelines exist, one-shots play as they scroll into view; an
+   element can start later in the scroll with --mkt-range (staggering). */
 @supports (animation-timeline: view()) {
   .mkt-typing, .mkt-rise {
     animation-timeline: view();
-    animation-range: entry 60% cover 40%;
+    animation-range: var(--mkt-range, entry 60% cover 40%);
     animation-delay: 0s;
   }
 }
 
-/* WCAG 2.2.2: the landing page's "Pause animations" button sets this. */
+/* WCAG 2.2.2: the landing page's "Pause animations" button sets this. Loops
+   pause; scroll-linked and one-shot effects jump to their end state (open lid,
+   flat card, visible text) instead of freezing half-way. */
 .marketing[data-motion="paused"] .mkt-meteor { display: none; }
-.marketing[data-motion="paused"] [class*="mkt-"],
-.marketing[data-motion="paused"] [class*="mkt-"]::after {
+.marketing[data-motion="paused"] .mkt-fill,
+.marketing[data-motion="paused"] .mkt-pulse::after,
+.marketing[data-motion="paused"] .mkt-caret::after {
   animation-play-state: paused !important;
+}
+.marketing[data-motion="paused"] :is(.mkt-tilt, .mkt-lid, .mkt-rise, .mkt-typing) {
+  animation: none !important;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .mkt-meteor, .mkt-tilt, .mkt-lid, .mkt-typing, .mkt-rise, .mkt-pulse, .mkt-fill,
-  .mkt-typing::after, .mkt-pulse::after {
+  .mkt-caret::after, .mkt-pulse::after {
     animation: none !important;
   }
   .mkt-pulse::after { opacity: 0; }

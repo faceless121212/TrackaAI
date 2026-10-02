@@ -61,7 +61,6 @@ export function MotionToggle() {
       variant="ghost"
       aria-pressed={paused}
       aria-label="Pause animations"
-      title={paused ? "Play animations" : "Pause animations"}
       onClick={() => writePaused(!paused)}
       className="text-muted-foreground hover:text-foreground size-8"
     >

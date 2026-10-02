@@ -66,9 +66,11 @@ const askVisual = (
 const writerVisual = (
   <div className="space-y-2 text-left text-sm">
     <div className={cn(panel, "text-muted-foreground px-3 py-2")}>
-      <span className="mkt-typing inline-block align-bottom font-mono text-xs">export the board as CSV</span>
+      <span className="mkt-caret font-mono text-xs">
+        <span className="mkt-typing">export the board as CSV</span>
+      </span>
     </div>
-    <div className={cn(panel, "mkt-rise space-y-2 p-3")} style={delay(2.8)}>
+    <div className={cn(panel, "mkt-rise space-y-2 p-3")} style={{ ...delay(2.8), "--mkt-range": "cover 35% cover 55%" } as CSSProperties}>
       <p className="font-medium">Export a board to CSV</p>
       <div className="flex gap-1.5">
         <Chip>

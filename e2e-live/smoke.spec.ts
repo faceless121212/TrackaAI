@@ -4,7 +4,7 @@ import { expect, test, type Page } from "@playwright/test";
 // Defaults are the development seed (supabase/seed.sql). Never seed a public deployment with them.
 const DEMO = {
   email: process.env.SMOKE_EMAIL ?? "demo@trackaai.test",
-  password: process.env.SMOKE_PASSWORD ?? "demo-password",
+  password: process.env.SMOKE_PASSWORD || process.env.DEMO_PASSWORD || "demo-password",
 };
 const id = Date.now().toString(36);
 const title = `Smoke ${id}`;

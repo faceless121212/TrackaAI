@@ -4,6 +4,7 @@ import { cookieSession } from "@/server/auth/cookie-session";
 import { resolveDataBackend } from "./backend";
 import { createMockRepositories } from "./mock/repositories";
 import { seedDb } from "./mock/seed";
+import { seedShowcaseDb } from "./mock/showcase-seed";
 import { createFileStore } from "./mock/store";
 import { createSupabaseRepositories } from "./supabase/repositories";
 import { createSupabaseServerClient } from "./supabase/server-client";
@@ -25,7 +26,9 @@ function createRepositories(): Repositories {
     /* turbopackIgnore: true */ process.cwd(),
     process.env.MOCK_DB_PATH || ".data/mock-db.json",
   );
-  return createMockRepositories(createFileStore(file, seedDb), cookieSession);
+  // MOCK_SEED=showcase: the fuller team behind the marketing screenshot.
+  const seed = process.env.MOCK_SEED === "showcase" ? seedShowcaseDb : seedDb;
+  return createMockRepositories(createFileStore(file, seed), cookieSession);
 }
 
 export function getRepositories(): Repositories {

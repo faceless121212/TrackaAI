@@ -1,4 +1,8 @@
+import { existsSync } from "node:fs";
 import { defineConfig, devices } from "@playwright/test";
+
+// The demo account's password lives in .env.local (DEMO_PASSWORD) once changed.
+if (existsSync(".env.local")) process.loadEnvFile(".env.local");
 
 // Live smoke test against a running server on the Supabase backend (with real
 // AI calls). Start one first, e.g. `pnpm build && pnpm start`, then:

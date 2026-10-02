@@ -29,6 +29,10 @@ describe("isSessionOptionalPath", () => {
   it("covers pages for everyone that still keep a signed-in session fresh", () => {
     expect(isSessionOptionalPath("/pricing")).toBe(true);
     expect(isSessionOptionalPath("/sign-in")).toBe(false);
+    // The landing page: only "/" itself, never everything under it.
+    expect(isSessionOptionalPath("/")).toBe(true);
+    expect(isSessionOptionalPath("/acme")).toBe(false);
+    expect(isSessionOptionalPath("/acme/settings")).toBe(false);
     expect(isSessionOptionalPath("/sign-out")).toBe(false);
   });
 });

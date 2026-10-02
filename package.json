@@ -12,7 +12,9 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:supabase": "SUPABASE_INTEGRATION=1 vitest run integration --testTimeout=30000",
-    "test:smoke": "playwright test -c playwright.smoke.config.ts"
+    "test:smoke": "playwright test -c playwright.smoke.config.ts",
+    "screenshot": "playwright test -c playwright.marketing.config.ts --grep @screenshot",
+    "test:visual": "playwright test -c playwright.marketing.config.ts --grep @visual"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.68",
@@ -63,5 +65,8 @@
     "vite-tsconfig-paths": "^6.1.1",
     "vitest": "^5.0.2"
   },
-  "packageManager": "pnpm@10.30.3"
+  "packageManager": "pnpm@10.30.3",
+  "engines": {
+    "node": "22.x"
+  }
 }

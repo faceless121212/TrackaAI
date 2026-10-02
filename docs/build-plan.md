@@ -15584,3 +15584,10 @@ Requested on 2026-10-02: "chat with my issues to see what needs to be resolved, 
 - **Links:** every result carries an in-app `url`, and the model is told to link issues with it. Untrusted Markdown keeps app-relative links in the app; everything else still opens apart with `nofollow`.
 - **Data:** `tasks.listForTeam` loads the team's tasks in one embedded select, capped at 1000 (PostgREST's max rows). The tools say when the cap is reached.
 - **Tests:** tool tests cover filters, ordering, scoping, the other team and unknown names; schema test for the new feature; mock and live `listForTeam` tests; e2e with a scripted mock model (urgent issues → link → task opens); an axe check of the page; and a real-model step in `pnpm test:smoke`.
+- **Review fixes:**
+  - In untrusted Markdown, only the exact issue-link shape (`isIssueLink`) renders as an in-app link, without prefetch. Before, any app path such as `/sign-out` became one in every AI reply (Copilot, teammate comments), so injected issue text could plant a sign-out link.
+  - Focus stays in the input when the suggestion or New chat buttons disappear.
+- **Known limits:**
+  - Past 1000 tasks, the least recently updated drop out first, and old overdue issues are among them (the tools say so).
+  - "Today" is the UTC date, as in the Copilot.
+  - `team_overview` groups people by display name.

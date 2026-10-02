@@ -14,11 +14,14 @@ export function Markdown({ children, untrusted = false }: { children: string; un
         components={
           untrusted
             ? {
-                // App-relative links (Ask AI's issue links) stay in the app;
-                // anything else opens apart, marked as untrusted.
+                // Only the exact shape of an issue link (Ask AI's results) stays
+                // in the app, without prefetch; anything else, including other
+                // app paths like /sign-out, opens apart, marked as untrusted.
                 a: ({ href, children: text }) =>
-                  href && href.startsWith("/") && !href.startsWith("//") ? (
-                    <Link href={href}>{text}</Link>
+                  href && isIssueLink(href) ? (
+                    <Link href={href} prefetch={false}>
+                      {text}
+                    </Link>
                   ) : (
                     <a href={href} target="_blank" rel="noopener noreferrer nofollow">
                       {text}
@@ -33,3 +36,11 @@ export function Markdown({ children, untrusted = false }: { children: string; un
     </div>
   );
 }
+
+const ISSUE_LINK = /^\/[a-z0-9-]+\/board\/[A-Za-z0-9-]+\?task=[A-Z0-9]+-\d+$/;
+
+/** An in-app link to one issue: /<team>/board/<board id>?task=<KEY>. */
+export function isIssueLink(href: string): boolean {
+  return ISSUE_LINK.test(href);
+}
+

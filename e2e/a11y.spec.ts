@@ -33,6 +33,7 @@ for (const theme of ["dark", "light"] as const) {
     });
 
     test("app pages, dialogs and panels", async ({ page }) => {
+      test.setTimeout(90_000); // a dozen screens, each with a full axe scan
       await signInAsDemo(page);
       await expectAccessible(page, "My tasks");
 

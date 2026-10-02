@@ -17,13 +17,18 @@ export async function signUpAction(_prev: FormState, formData: FormData): Promis
 
   // Invitees arrive with ?next=/invite/<token>; everyone else starts onboarding.
   const next = safeNextPath(values.next);
+  let redirectTo: string;
+  try {
+    // Where the confirmation email's link lands (Supabase); ignored by the mock.
+    redirectTo = await absoluteUrl(withNext(AUTH_CALLBACK_PATH, next));
+  } catch (error) {
+    // A production server without APP_URL: say so instead of a crash page.
+    console.error("[auth] sign-up can't build its confirmation link", error);
+    return { formError: "Sign-up isn't available on this server right now. Please try again later.", values: echo };
+  }
   let needsConfirmation: boolean;
   try {
-    ({ needsConfirmation } = await getRepositories().auth.signUp({
-      ...parsed.data,
-      // Where the confirmation email's link lands (Supabase); ignored by the mock.
-      redirectTo: await absoluteUrl(withNext(AUTH_CALLBACK_PATH, next)),
-    }));
+    ({ needsConfirmation } = await getRepositories().auth.signUp({ ...parsed.data, redirectTo }));
   } catch (error) {
     if (error instanceof ConflictError) return { fieldErrors: { [error.field]: [error.message] }, values: echo };
     throw error;

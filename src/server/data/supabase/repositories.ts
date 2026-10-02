@@ -276,14 +276,24 @@ function maybe<T>(result: Result<T>): T | null {
   return result.data ?? null;
 }
 
+// Auth rejections people can act on, shown on the form's email field.
+const AUTH_EMAIL_ERRORS: Record<string, string> = {
+  email_address_invalid: "This email address can't be used. Check it for typos, or try another address.",
+  // Supabase's built-in mailer only sends to the project team's own addresses
+  // until custom SMTP is set up (Authentication → Emails → SMTP settings).
+  email_address_not_authorized: "We can't send a confirmation email to this address yet. Try again later or contact support.",
+  over_email_send_rate_limit: "Too many sign-ups right now — please try again in a few minutes.",
+  over_request_rate_limit: "Too many attempts. Wait a minute, then try again.",
+  signup_disabled: "Sign-ups are closed right now.",
+};
+
 function authConflict(error: AuthError): Error {
   if (error.code === "user_already_exists" || error.code === "email_exists") {
     return new ConflictError("email", "An account with this email already exists");
   }
   if (error.code === "weak_password") return new ConflictError("password", error.message);
-  if (error.code === "over_email_send_rate_limit") {
-    return new ConflictError("email", "Too many sign-ups right now — please try again in a few minutes.");
-  }
+  const emailProblem = error.code ? AUTH_EMAIL_ERRORS[error.code] : undefined;
+  if (emailProblem) return new ConflictError("email", emailProblem);
   return new Error(`Supabase auth error ${error.code ?? error.status}: ${error.message}`);
 }
 
@@ -357,6 +367,12 @@ export function createSupabaseRepositories(client: () => Promise<Client>): Repos
         const { data: result, error } = await db.auth.signInWithPassword({ email, password });
         if (error?.code === "email_not_confirmed") {
           throw new ConflictError("email", "Confirm your email first: we sent you a link when you signed up.");
+        }
+        if (error?.code === "over_request_rate_limit") throw new ConflictError("email", AUTH_EMAIL_ERRORS.over_request_rate_limit);
+        if (error && error.code !== "invalid_credentials") {
+          // An outage or unexpected rejection: don't call the password wrong.
+          console.error("[auth] sign-in failed", error.code ?? error.status, error.message);
+          throw new ConflictError("email", "We couldn't sign you in right now. Please try again in a moment.");
         }
         if (error || !result.user) return null;
         return getProfile(db, result.user.id);

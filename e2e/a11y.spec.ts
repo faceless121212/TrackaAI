@@ -33,6 +33,7 @@ for (const theme of ["dark", "light"] as const) {
     });
 
     test("app pages, dialogs and panels", async ({ page }) => {
+      test.setTimeout(90_000); // a dozen screens, each with a full axe scan
       await signInAsDemo(page);
       await expectAccessible(page, "My tasks");
 
@@ -54,6 +55,10 @@ for (const theme of ["dark", "light"] as const) {
       await expect(page.getByRole("dialog", { name: "Copilot" })).toBeVisible();
       await expectAccessible(page, "copilot", "[role=dialog]");
       await page.keyboard.press("Escape");
+
+      await page.getByRole("link", { name: "Ask AI" }).click();
+      await expect(page.getByRole("heading", { name: "Ask AI" })).toBeVisible();
+      await expectAccessible(page, "Ask AI");
 
       for (const tab of ["General", "Members", "Labels", "AI teammates", "Billing", "Profile"] as const) {
         await openSettings(page, tab);

@@ -148,6 +148,9 @@ export interface BoardsRepo {
   deleteColumn(id: string): Promise<void>;
 }
 
+/** Cap on listForTeam (PostgREST's default max rows); callers say when it's reached. */
+export const TEAM_TASKS_LIMIT = 1000;
+
 export interface TasksRepo {
   /**
    * Allocates the next task number for the board's workspace and places the
@@ -159,6 +162,8 @@ export interface TasksRepo {
   listForBoard(boardId: string): Promise<Task[]>;
   /** Tasks in any of the team's boards assigned to the user, most recently updated first. */
   listAssignedTo(teamId: string, userId: string): Promise<Task[]>;
+  /** Every task on the team's boards, most recently updated first, at most TEAM_TASKS_LIMIT. */
+  listForTeam(teamId: string): Promise<Task[]>;
   update(id: string, patch: UpdateTaskInput): Promise<Task>;
   /** Moves the task to `index` among the other tasks of `columnId` (same board). */
   move(id: string, to: { columnId: string; index: number }): Promise<Task>;

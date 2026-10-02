@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { statusOf } from "./status-icon";
+import { isResolved, statusOf } from "./status";
 
 describe("statusOf", () => {
   it.each([
@@ -20,5 +20,12 @@ describe("statusOf", () => {
     ["Inactive", "todo"],
   ])("maps %j to %s", (name, status) => {
     expect(statusOf(name)).toBe(status);
+  });
+});
+
+describe("isResolved", () => {
+  it("is true only for done and canceled", () => {
+    expect(["Done", "Won't do"].map((c) => isResolved(statusOf(c)))).toEqual([true, true]);
+    expect(["Backlog", "Todo", "In Progress", "In Review"].map((c) => isResolved(statusOf(c)))).toEqual([false, false, false, false]);
   });
 });

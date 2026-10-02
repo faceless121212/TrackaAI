@@ -358,6 +358,18 @@ describe("tasks", () => {
     await repos.tasks.create(taskInput(board.id, columns[0].id, "Nobody's"));
     expect((await repos.tasks.listAssignedTo(team.id, owner.id)).map((t) => t.id)).toEqual([mine.id]);
   });
+
+  it("lists every task of the team, newest change first, and nothing from other teams", async () => {
+    const { team, board, columns } = await setupBoard();
+    const first = await repos.tasks.create(taskInput(board.id, columns[0].id, "First"));
+    const second = await repos.tasks.create(taskInput(board.id, columns[1].id, "Second"));
+    await repos.tasks.update(first.id, { title: "First, edited" });
+    const other = await repos.teams.create({ name: "Other", slug: "other-team", ownerId: owner.id });
+    const ws = await repos.workspaces.create({ teamId: other.id, name: "Ops", keyPrefix: "OPS" });
+    const otherBoard = await repos.boards.create({ workspaceId: ws.id, name: "Ops", description: null });
+    await repos.tasks.create(taskInput(otherBoard.id, (await repos.boards.listColumns(otherBoard.id))[0].id, "Elsewhere"));
+    expect((await repos.tasks.listForTeam(team.id)).map((t) => t.id)).toEqual([first.id, second.id]);
+  });
 });
 
 describe("columns", () => {

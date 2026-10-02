@@ -34,7 +34,7 @@ import {
   PlanLimitError,
   RateLimitError,
 } from "../errors";
-import type { Repositories } from "../types";
+import { TEAM_TASKS_LIMIT, type Repositories } from "../types";
 import type { Database } from "./database.types";
 import { agentWorkerToken } from "./worker-token";
 
@@ -707,6 +707,17 @@ export function createSupabaseRepositories(client: () => Promise<Client>): Repos
             .eq("boards.workspaces.team_id", teamId)
             .eq("assignee_user_id", userId)
             .order("updated_at", { ascending: false }),
+        );
+      },
+      async listForTeam(teamId) {
+        const db = await client();
+        return selectTasks((select) =>
+          db
+            .from("tasks")
+            .select(`${select}, boards!inner(workspaces!inner(team_id))`)
+            .eq("boards.workspaces.team_id", teamId)
+            .order("updated_at", { ascending: false })
+            .limit(TEAM_TASKS_LIMIT),
         );
       },
       async update(id, patch: UpdateTaskInput) {

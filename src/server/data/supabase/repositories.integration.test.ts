@@ -119,6 +119,10 @@ describe.skipIf(!url || !key)("Supabase repositories (live project)", () => {
     expect(updated).toMatchObject({ priority: "high", labelIds: [bug.id], dueDate: "2026-12-01" });
     expect(await r.tasks.getByKey(workspace.id, "lc-1")).toMatchObject({ id: a.id, labelIds: [bug.id] });
     expect((await r.tasks.listAssignedTo(teamId, demo.user.id)).map((t) => t.id)).toEqual([a.id]);
+    const teamTasks = await r.tasks.listForTeam(teamId);
+    expect(teamTasks.map((t) => t.id)).toEqual(expect.arrayContaining([a.id, b.id, top.id]));
+    expect(teamTasks.find((t) => t.id === a.id)?.labelIds).toEqual([bug.id]);
+    expect(await mate.repos.tasks.listForTeam(teamId)).toEqual([]); // not a member: RLS hides it all
 
     const comment = await r.comments.create({ taskId: a.id, body: "Looks good", author: { kind: "user", userId: demo.user.id } });
     expect((await r.comments.listForTask(a.id)).map((c) => c.body)).toEqual(["Looks good"]);

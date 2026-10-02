@@ -115,6 +115,16 @@ test("TrackaAI works end to end on the live backend", async ({ page }) => {
       await expect(panel).toBeHidden();
     });
 
+    await timed("AI: Ask AI across the team (real model)", async () => {
+      await page.goto(boardUrl.replace(/\/board\/.*/, "/ask"));
+      await page.getByLabel("Ask about your issues").fill(`Find the issue titled "${title}" and link to it.`);
+      await page.keyboard.press("Enter");
+      const log = page.getByRole("log", { name: "Ask AI conversation" });
+      await expect(log.getByRole("link", { name: new RegExp(title) })).toBeVisible({ timeout: 60_000 });
+      await expect(log).toHaveAttribute("aria-busy", "false", { timeout: 60_000 });
+      await page.goto(boardUrl);
+    });
+
     await timed("AI teammate: add one", async () => {
       await page.goto(boardUrl.replace(/\/board\/.*/, "/settings/agents"));
       await page.getByLabel("Name").fill(`Smoke bot ${id}`);

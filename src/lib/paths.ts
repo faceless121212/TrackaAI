@@ -3,6 +3,7 @@ export const ONBOARDING_PATH = "/onboarding";
 
 export const teamPath = (teamSlug: string) => `/${teamSlug}`;
 export const boardPath = (teamSlug: string, boardId: string) => `/${teamSlug}/board/${boardId}`;
+export const askPath = (teamSlug: string) => `/${teamSlug}/ask`;
 export const onboardingWorkspacePath = (teamSlug: string) => `${ONBOARDING_PATH}/${teamSlug}/workspace`;
 export const onboardingInvitePath = (teamSlug: string, boardId: string) =>
   `${ONBOARDING_PATH}/${teamSlug}/invite?board=${encodeURIComponent(boardId)}`;

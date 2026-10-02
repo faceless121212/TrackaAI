@@ -51,7 +51,8 @@ test("the landing page leads with AI and shows the product", async ({ page }) =>
   await expect(page).toHaveTitle("TrackaAI · Project management with AI teammates");
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Project management with AI teammates built in");
   await expect(page.getByRole("img", { name: /A TrackaAI board/ })).toBeVisible();
-  for (const section of ["Your team, plus teammates that never sleep", "From sign-up to shipped, in three steps", "Simple pricing that grows with your team", "Questions, answered"]) {
+  await expect(page.getByRole("img", { name: /Ask AI answering/ })).toBeAttached();
+  for (const section of ["Your team, plus teammates that never sleep", "How teams put AI to work", "From sign-up to shipped, in three steps", "Simple pricing that grows with your team", "Questions, answered"]) {
     await expect(page.getByRole("heading", { level: 2, name: section })).toBeVisible();
   }
   for (const plan of ["Free", "Lite", "Pro"]) await expect(page.getByLabel(`${plan} plan`)).toBeVisible();
@@ -59,7 +60,7 @@ test("the landing page leads with AI and shows the product", async ({ page }) =>
 
 test("calls to action lead to sign-up, sign-in and pricing", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("link", { name: "Get started free" }).click();
+  await page.getByRole("main").getByRole("link", { name: "Start free" }).click();
   await expect(page).toHaveURL(/\/sign-up$/);
 
   await page.goto("/");
@@ -94,4 +95,55 @@ test("signed-in members skip the landing page", async ({ page }) => {
   await expect(page).toHaveURL(/\/acme$/);
   await page.goto("/pricing");
   await expect(page.getByRole("banner").getByRole("link", { name: "Open app" })).toBeVisible();
+});
+
+test("workflow tabs switch with the mouse and the keyboard", async ({ page }) => {
+  await page.goto("/");
+  const tabs = page.getByRole("tablist");
+  await expect(page.getByRole("tabpanel")).toContainText("An AI teammate drafts the spec");
+  await tabs.getByRole("tab", { name: "Triage with Ask AI" }).click();
+  await expect(page.getByRole("tabpanel")).toContainText("Find out what's on fire");
+  await page.keyboard.press("ArrowRight");
+  await expect(tabs.getByRole("tab", { name: "Plan with the Copilot" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tabpanel")).toContainText("Reorganise a board in one sentence");
+});
+
+test("nothing moves when the visitor asks for reduced motion", async ({ browser }) => {
+  const context = await browser.newContext({ reducedMotion: "reduce" });
+  const page = await context.newPage();
+  await page.goto("/");
+  const motion = await page.evaluate(() => ({
+    animated: [...document.querySelectorAll('[class*="mkt-"]')].filter((el) => getComputedStyle(el).animationName !== "none").length,
+    meteorsShown: [...document.querySelectorAll(".mkt-meteor")].filter((el) => getComputedStyle(el).display !== "none").length,
+  }));
+  expect(motion).toEqual({ animated: 0, meteorsShown: 0 });
+  await context.close();
+});
+
+test("a visible control pauses every looping animation (WCAG 2.2.2), and it's remembered", async ({ page }) => {
+  await page.goto("/");
+  const toggle = page.getByRole("banner").getByRole("button", { name: "Pause animations" });
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  const running = () =>
+    page.evaluate(
+      () =>
+        document
+          .getAnimations()
+          .filter((a) => a instanceof CSSAnimation && a.animationName.startsWith("mkt-") && a.timeline instanceof DocumentTimeline)
+          .filter((a) => a.playState === "running").length,
+    );
+  await expect.poll(running).toBe(0);
+  // Paused never hides content: scroll-linked and one-shot effects show their end state.
+  const endState = () =>
+    page.evaluate(() => ({
+      lid: getComputedStyle(document.querySelector(".mkt-lid")!).transform,
+      hiddenRises: [...document.querySelectorAll(".mkt-rise")].filter((el) => getComputedStyle(el).opacity !== "1").length,
+    }));
+  await expect.poll(endState).toEqual({ lid: "none", hiddenRises: 0 });
+  await page.reload();
+  await expect(page.getByRole("banner").getByRole("button", { name: "Pause animations" })).toHaveAttribute("aria-pressed", "true");
+  await expect.poll(running).toBe(0);
+  await expect.poll(endState).toEqual({ lid: "none", hiddenRises: 0 });
 });

@@ -1,3 +1,4 @@
+import { CreditCard } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { PricingTable } from "@/components/billing/pricing-table";
@@ -51,10 +52,12 @@ export default async function PricingPage() {
         />
         <div className="mx-auto max-w-6xl px-4 pt-20 pb-16 sm:px-6 sm:pt-28">
           <div className="mx-auto max-w-2xl space-y-4 text-center">
-            <Eyebrow>Pricing</Eyebrow>
+            <Eyebrow icon={CreditCard} center>
+              Pricing
+            </Eyebrow>
             <h1
               id="pricing-title"
-              className="from-foreground to-foreground/55 bg-gradient-to-b bg-clip-text text-4xl font-semibold tracking-tight text-balance text-transparent sm:text-6xl"
+              className="from-foreground via-foreground to-mkt-accent/80 bg-gradient-to-br bg-clip-text text-4xl font-semibold tracking-tight text-balance text-transparent sm:text-6xl"
             >
               Simple plans for every team size
             </h1>

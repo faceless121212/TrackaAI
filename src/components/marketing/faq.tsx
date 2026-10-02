@@ -1,4 +1,4 @@
-import { Plus } from "lucide-react";
+import { CircleHelp, Plus } from "lucide-react";
 import { Eyebrow, SectionHeading } from "./marketing-shell";
 
 export type FaqItem = { question: string; answer: string };
@@ -44,7 +44,9 @@ export function Faq({ items, title = "Questions, answered" }: { items: FaqItem[]
   return (
     <section id="faq" aria-labelledby="faq-title" className="mx-auto max-w-3xl scroll-mt-20 px-4 py-24 sm:px-6 sm:py-32">
       <div className="space-y-4 text-center">
-        <Eyebrow>FAQ</Eyebrow>
+        <Eyebrow icon={CircleHelp} center>
+          FAQ
+        </Eyebrow>
         <SectionHeading id="faq-title">{title}</SectionHeading>
       </div>
       <div className="divide-mkt-line border-mkt-line mt-12 divide-y border-y">

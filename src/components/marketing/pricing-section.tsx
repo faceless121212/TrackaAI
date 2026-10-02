@@ -1,4 +1,4 @@
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, CreditCard } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { PricingTable } from "@/components/billing/pricing-table";
@@ -24,7 +24,9 @@ export function PricingSection() {
   return (
     <section id="pricing" aria-labelledby="pricing-title" className="mx-auto max-w-6xl scroll-mt-20 px-4 py-24 sm:px-6 sm:py-32">
       <div className="mx-auto max-w-2xl space-y-4 text-center">
-        <Eyebrow>Pricing</Eyebrow>
+        <Eyebrow icon={CreditCard} center>
+          Pricing
+        </Eyebrow>
         <SectionHeading id="pricing-title">Simple pricing that grows with your team</SectionHeading>
         <p className="text-muted-foreground text-lg">Per team, not per seat. Start free and upgrade when you bring people in.</p>
       </div>

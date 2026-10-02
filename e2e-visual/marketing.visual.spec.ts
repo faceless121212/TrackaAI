@@ -1,5 +1,8 @@
 import { expect, test } from "@playwright/test";
 
+// Reduced motion: deterministic frames (no meteors mid-flight, no scroll tilt).
+test.use({ reducedMotion: "reduce" });
+
 // Pixel baselines for the marketing pages. Update after an intended design
 // change with `pnpm test:visual --update-snapshots`, then review the diff.
 for (const width of [375, 768, 1440]) {

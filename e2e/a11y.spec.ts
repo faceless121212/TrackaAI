@@ -9,7 +9,14 @@ import { openSettings, signInAsDemo } from "./helpers";
 /** `scope`: check only inside it (an open dialog; what's behind the overlay is dimmed on purpose). */
 async function expectAccessible(page: Page, name: string, scope?: string) {
   // Mid-animation (fading in) text would fail the contrast check.
-  await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== "running"));
+  // The landing page's own decorations (mkt-*: looping or scroll-linked) never
+  // "finish"; skip only those, so other animations (dialogs, spinners) are still awaited.
+  await page.waitForFunction(() =>
+    document
+      .getAnimations()
+      .filter((a) => !(a instanceof CSSAnimation && a.animationName.startsWith("mkt-")))
+      .every((a) => a.playState !== "running"),
+  );
   let axe = new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]);
   if (scope) axe = axe.include(scope);
   const { violations } = await axe.analyze();

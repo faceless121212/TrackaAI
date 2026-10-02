@@ -1,3 +1,4 @@
+import Link from "next/link";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -13,11 +14,16 @@ export function Markdown({ children, untrusted = false }: { children: string; un
         components={
           untrusted
             ? {
-                a: ({ href, children: text }) => (
-                  <a href={href} target="_blank" rel="noopener noreferrer nofollow">
-                    {text}
-                  </a>
-                ),
+                // App-relative links (Ask AI's issue links) stay in the app;
+                // anything else opens apart, marked as untrusted.
+                a: ({ href, children: text }) =>
+                  href && href.startsWith("/") && !href.startsWith("//") ? (
+                    <Link href={href}>{text}</Link>
+                  ) : (
+                    <a href={href} target="_blank" rel="noopener noreferrer nofollow">
+                      {text}
+                    </a>
+                  ),
               }
             : undefined
         }

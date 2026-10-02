@@ -1,6 +1,7 @@
 import "server-only";
 import { anthropic } from "@ai-sdk/anthropic";
 import type { LanguageModel } from "ai";
+import { mockAskModel } from "./ask/mock-ask-model";
 import { mockCopilotModel } from "./copilot/mock-copilot-model";
 import { jsonStreamModel, textModel } from "./mock-model";
 
@@ -8,6 +9,8 @@ import { jsonStreamModel, textModel } from "./mock-model";
 export const GENERATION_MODEL = "claude-haiku-4-5";
 /** Conversation with tools (board copilot). */
 export const COPILOT_MODEL = "claude-sonnet-5";
+/** "Ask AI": team-wide, read-only chat about the team's issues. */
+export const ASK_MODEL = "claude-sonnet-5-5";
 
 /** AI_MOCK=1 (e2e, CI) streams canned output instead of calling Anthropic. */
 export function aiMocked(): boolean {
@@ -27,6 +30,11 @@ export function generationModel(mockOutput: () => unknown): { model: LanguageMod
 export function copilotModel(): { model: LanguageModel; modelId: string } {
   if (aiMocked()) return { model: mockCopilotModel(), modelId: "mock" };
   return { model: anthropic(COPILOT_MODEL), modelId: COPILOT_MODEL };
+}
+
+export function askModel(): { model: LanguageModel; modelId: string } {
+  if (aiMocked()) return { model: mockAskModel(), modelId: "mock" };
+  return { model: anthropic(ASK_MODEL), modelId: ASK_MODEL };
 }
 
 /** AI teammates write longer deliverables. */

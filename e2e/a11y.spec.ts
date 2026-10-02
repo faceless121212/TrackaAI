@@ -55,6 +55,10 @@ for (const theme of ["dark", "light"] as const) {
       await expectAccessible(page, "copilot", "[role=dialog]");
       await page.keyboard.press("Escape");
 
+      await page.getByRole("link", { name: "Ask AI" }).click();
+      await expect(page.getByRole("heading", { name: "Ask AI" })).toBeVisible();
+      await expectAccessible(page, "Ask AI");
+
       for (const tab of ["General", "Members", "Labels", "AI teammates", "Billing", "Profile"] as const) {
         await openSettings(page, tab);
         await expectAccessible(page, `settings: ${tab}`);

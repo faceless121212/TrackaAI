@@ -28,7 +28,7 @@ import {
   PlanLimitError,
   RateLimitError,
 } from "../errors";
-import type { Repositories } from "../types";
+import { TEAM_TASKS_LIMIT, type Repositories } from "../types";
 import type { MockDb } from "./db";
 import { hashPassword, verifyPassword } from "./password";
 import { createMemorySession, type SessionStore } from "./session";
@@ -371,6 +371,15 @@ export function createMockRepositories(store: MockStore, session: SessionStore =
           return db.tasks
             .filter((t) => boardIds.has(t.boardId) && t.assignee?.kind === "user" && t.assignee.userId === userId)
             .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+        }),
+      listForTeam: (teamId) =>
+        store.read((db) => {
+          const workspaceIds = new Set(db.workspaces.filter((w) => w.teamId === teamId).map((w) => w.id));
+          const boardIds = new Set(db.boards.filter((b) => workspaceIds.has(b.workspaceId)).map((b) => b.id));
+          return db.tasks
+            .filter((t) => boardIds.has(t.boardId))
+            .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+            .slice(0, TEAM_TASKS_LIMIT);
         }),
       update: (id, patch) =>
         store.write((db) => {

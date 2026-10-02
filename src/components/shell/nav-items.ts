@@ -1,5 +1,5 @@
-import { Inbox, Settings, type LucideIcon } from "lucide-react";
-import { settingsPath, teamPath } from "@/lib/paths";
+import { Inbox, Settings, Sparkles, type LucideIcon } from "lucide-react";
+import { askPath, settingsPath, teamPath } from "@/lib/paths";
 
 export type NavItem = { title: string; href: string; icon: LucideIcon };
 
@@ -7,6 +7,7 @@ export type NavItem = { title: string; href: string; icon: LucideIcon };
 export function navItems(teamSlug: string): NavItem[] {
   return [
     { title: "My tasks", href: teamPath(teamSlug), icon: Inbox },
+    { title: "Ask AI", href: askPath(teamSlug), icon: Sparkles },
     { title: "Settings", href: settingsPath(teamSlug), icon: Settings },
   ];
 }

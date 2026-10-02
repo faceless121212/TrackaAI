@@ -4,7 +4,7 @@ import { PRIORITIES, idSchema, type Label } from "./schemas";
 // Shapes the AI features stream. Shared by the route handlers (server) and
 // useObject (client), so both validate the same thing.
 
-export const AI_FEATURES = ["task_writer", "breakdown", "copilot", "agent"] as const;
+export const AI_FEATURES = ["task_writer", "breakdown", "copilot", "agent", "ask"] as const;
 export type AiFeature = (typeof AI_FEATURES)[number];
 
 /**

@@ -20,3 +20,13 @@ export function resolveAppOrigin({
   const protocol = proto ?? (resolvedHost.startsWith("localhost") ? "http" : "https");
   return `${protocol}://${resolvedHost}`;
 }
+
+/**
+ * The configured public origin: APP_URL, else on Vercel the deployment's own
+ * address (VERCEL_URL, set by the platform, so preview deployments work
+ * without extra setup). Never derived from request headers.
+ */
+export function configuredAppUrl(env: { APP_URL?: string; VERCEL_URL?: string }): string | undefined {
+  if (env.APP_URL) return env.APP_URL;
+  return env.VERCEL_URL ? `https://${env.VERCEL_URL}` : undefined;
+}

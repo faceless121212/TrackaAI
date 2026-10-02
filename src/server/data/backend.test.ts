@@ -15,4 +15,10 @@ describe("resolveDataBackend", () => {
   it("throws on anything else", () => {
     expect(() => resolveDataBackend("postgres")).toThrow(/Unknown DATA_BACKEND "postgres"/);
   });
+
+  it("refuses the mock backend on Vercel (read-only disk, development session key)", () => {
+    expect(() => resolveDataBackend(undefined, true)).toThrow(/DATA_BACKEND=supabase/);
+    expect(() => resolveDataBackend("mock", true)).toThrow(/DATA_BACKEND=supabase/);
+    expect(resolveDataBackend("supabase", true)).toBe("supabase");
+  });
 });
